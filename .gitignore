@@ -1,0 +1,32 @@
+# 可执行文件
+*.exe
+
+# 编译产物
+bin/
+
+# IDE和编辑器配置
+.trae/
+
+# 操作系统文件
+Thumbs.db
+*.swp
+*.swo
+
+# Go编译产物
+*.o
+*.a
+*.so
+
+# Go模块相关
+vendor/
+
+# 日志文件
+*.log
+
+# 测试相关
+*.test
+
+# 环境变量文件
+.env
+.env.local
+.env.*.local
