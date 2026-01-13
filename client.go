@@ -352,6 +352,8 @@ func (c *GameClient) handleMessage(msg interface{}) {
 					GameStatus:   "",
 				}
 				c.IsExiting = false
+				// 清空消息日志，显示全新的大厅视图
+				c.MsgLog = make([]string, 0, MaxLogSize)
 				c.AddLog("已回到大厅")
 				c.DrawTable()
 				return
@@ -471,7 +473,10 @@ func (c *GameClient) handleResponse(resp Response) {
 					}
 				}
 				if roomID, ok := dataMap["room_id"].(float64); ok {
-					c.GameInfo.RoomID = int(roomID)
+					oldRoomID := c.GameInfo.RoomID
+					newRoomID := int(roomID)
+					c.GameInfo.RoomID = newRoomID
+
 					// 如果退出房间（room_id为0），清理相关数据
 					if c.GameInfo.RoomID == 0 {
 						c.GameInfo.Players = []PlayerInfo{}
@@ -485,10 +490,17 @@ func (c *GameClient) handleResponse(resp Response) {
 						}
 						// 重置退出状态，允许在大厅中再次输入 exit 退出程序
 						c.IsExiting = false
+						// 清空消息日志，显示全新的大厅视图
+						c.MsgLog = make([]string, 0, MaxLogSize)
 						// 强制重绘，此时会自动显示大厅视图
 						c.DrawTable()
-					} else {
+					} else if oldRoomID == 0 && newRoomID > 0 {
+						// 从大厅进入房间，清空消息日志
+						c.MsgLog = make([]string, 0, MaxLogSize)
 						// 加入房间成功，重置退出状态
+						c.IsExiting = false
+					} else {
+						// 房间内的其他操作
 						c.IsExiting = false
 					}
 				}

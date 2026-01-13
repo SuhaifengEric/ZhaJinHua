@@ -141,10 +141,10 @@ func (s *Server) handleClient(client *Client) {
 			if room.GetPlayerCount() == 0 {
 				s.RemoveRoom(room.ID)
 				fmt.Printf("房间 %d 已销毁\n", room.ID)
+			} else {
+				// 广播玩家离开消息，只向房间内的玩家发送
+				s.Manager.BroadcastToRoom(NewBroadcastMessage("system", fmt.Sprintf("玩家 %s 离开了游戏", player.Name), nil), room.ID)
 			}
-
-			// 广播玩家离开
-			s.Manager.Broadcast(NewBroadcastMessage("system", fmt.Sprintf("玩家 %s 离开了游戏", player.Name), nil))
 		}
 
 		client.Conn.Close()
@@ -367,11 +367,19 @@ func (s *Server) handleChat(client *Client, msg Message) {
 		return
 	}
 
-	// 广播聊天消息
-	s.Manager.Broadcast(NewBroadcastMessage("chat", content, map[string]interface{}{
+	// 根据玩家所在位置广播聊天消息
+	chatMsg := NewBroadcastMessage("chat", content, map[string]interface{}{
 		"player_id":   client.Player.ID,
 		"player_name": client.Player.Name,
-	}))
+	})
+
+	if client.Player.Room != nil && client.Player.Room.ID != 0 {
+		// 在房间内，只向房间内的玩家广播
+		s.Manager.BroadcastToRoom(chatMsg, client.Player.Room.ID)
+	} else {
+		// 在大厅，只向大厅的玩家广播
+		s.Manager.BroadcastToLobby(chatMsg)
+	}
 }
 
 // handleBet 处理下注（闷注/加注）
@@ -731,10 +739,10 @@ func (s *Server) handleCompare(client *Client, msg Message) {
 		loserName = client.Player.Name
 	}
 
-	// 广播比牌结果（不包含手牌内容）
+	// 广播比牌结果（不包含手牌内容），只向房间内的玩家发送
 	broadcastContent := fmt.Sprintf("玩家 %s 发起比牌，玩家 %s 战败出局！", client.Player.Name, loserName)
 	// fmt.Printf("[DEBUG] 服务器准备广播比牌结果: %s\n", broadcastContent)
-	s.Manager.Broadcast(NewBroadcastMessage("system", broadcastContent, nil))
+	s.Manager.BroadcastToRoom(NewBroadcastMessage("system", broadcastContent, nil), room.ID)
 
 	s.sendResponse(client, true, "比牌成功", nil)
 
@@ -824,7 +832,8 @@ func (s *Server) handleCreateRoom(client *Client, msg Message) {
 			"room_id": room.ID,
 		})
 
-		s.Manager.Broadcast(NewBroadcastMessage("system", fmt.Sprintf("玩家 %s 创建了房间 %d", client.Player.Name, room.ID), nil))
+		// 只向大厅的玩家广播房间创建消息
+		s.Manager.BroadcastToLobby(NewBroadcastMessage("system", fmt.Sprintf("玩家 %s 创建了房间 %d", client.Player.Name, room.ID), nil))
 		s.broadcastGameUpdate(room)
 	} else {
 		s.sendError(client, "创建房间失败")
@@ -879,7 +888,8 @@ func (s *Server) handleJoinRoom(client *Client, msg Message) {
 			"room_id": room.ID,
 		})
 
-		s.Manager.Broadcast(NewBroadcastMessage("system", fmt.Sprintf("玩家 %s 加入了房间 %d", client.Player.Name, room.ID), nil))
+		// 只向房间内的玩家广播加入消息
+		s.Manager.BroadcastToRoom(NewBroadcastMessage("system", fmt.Sprintf("玩家 %s 加入了房间 %d", client.Player.Name, room.ID), nil), room.ID)
 		s.broadcastGameUpdate(room)
 	} else {
 		s.sendError(client, "加入房间失败")
@@ -921,7 +931,8 @@ func (s *Server) handleStartGame(client *Client) {
 	room.StartGame()
 
 	s.sendResponse(client, true, "游戏开始", nil)
-	s.Manager.Broadcast(NewBroadcastMessage("system", "游戏开始！", nil))
+	// 只向房间内的玩家广播游戏开始消息
+	s.Manager.BroadcastToRoom(NewBroadcastMessage("system", "游戏开始！", nil), room.ID)
 	s.broadcastGameUpdate(room)
 }
 
@@ -965,6 +976,52 @@ func (cm *ClientManager) Broadcast(msg BroadcastMessage) {
 
 	for _, client := range cm.clients {
 		if client.IsOnline {
+			// 将BroadcastMessage包装为Message
+			wrappedMsg := NewMessage(ActionSystem, BroadcastMessage{
+				Type:    msg.Type,
+				Content: msg.Content,
+				Data:    msg.Data,
+			})
+			// 异步发送,避免阻塞
+			select {
+			case client.SendChan <- wrappedMsg:
+			default:
+			// 发送通道已满,跳过该客户端
+			}
+		}
+	}
+}
+
+// BroadcastToRoom 广播消息给指定房间的玩家
+func (cm *ClientManager) BroadcastToRoom(msg BroadcastMessage, roomID int) {
+	cm.mu.RLock()
+	defer cm.mu.RUnlock()
+
+	for _, client := range cm.clients {
+		if client.IsOnline && client.Player != nil && client.Player.Room != nil && client.Player.Room.ID == roomID {
+			// 将BroadcastMessage包装为Message
+			wrappedMsg := NewMessage(ActionSystem, BroadcastMessage{
+				Type:    msg.Type,
+				Content: msg.Content,
+				Data:    msg.Data,
+			})
+			// 异步发送,避免阻塞
+			select {
+			case client.SendChan <- wrappedMsg:
+			default:
+			// 发送通道已满,跳过该客户端
+			}
+		}
+	}
+}
+
+// BroadcastToLobby 广播消息给大厅中的玩家
+func (cm *ClientManager) BroadcastToLobby(msg BroadcastMessage) {
+	cm.mu.RLock()
+	defer cm.mu.RUnlock()
+
+	for _, client := range cm.clients {
+		if client.IsOnline && client.Player != nil && (client.Player.Room == nil || client.Player.Room.ID == 0) {
 			// 将BroadcastMessage包装为Message
 			wrappedMsg := NewMessage(ActionSystem, BroadcastMessage{
 				Type:    msg.Type,
@@ -1039,7 +1096,7 @@ func (s *Server) GetAvailableRoom() *Room {
 // broadcastGameUpdate 广播游戏更新
 func (s *Server) broadcastGameUpdate(room *Room) {
 	roomInfo := room.GetRoomInfo()
-	s.Manager.Broadcast(NewBroadcastMessage("game_update", "游戏状态更新", roomInfo))
+	s.Manager.BroadcastToRoom(NewBroadcastMessage("game_update", "游戏状态更新", roomInfo), room.ID)
 }
 
 // Stop 停止服务器
