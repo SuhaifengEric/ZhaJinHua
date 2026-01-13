@@ -1129,6 +1129,7 @@ func (c *GameClient) RunDashboard() {
 					c.AddLog(fmt.Sprintf("[错误] 登录失败: %v", err))
 					c.DrawTable()
 				}
+				// 登录成功后，服务器会返回响应，handleResponse会调用DrawTable，所以这里不需要再次调用
 			} else {
 				// 处理其他输入
 				c.HandleInput(input)
@@ -1142,6 +1143,7 @@ func (c *GameClient) RunDashboard() {
 			c.AddLog(fmt.Sprintf("[错误] 登录失败: %v", err))
 			c.DrawTable()
 		}
+		// 登录成功后，服务器会返回响应，handleResponse会调用DrawTable，所以这里不需要再次调用
 	}
 
 	// fmt.Println("[DEBUG] 进入主循环")
