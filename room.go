@@ -110,8 +110,16 @@ func (r *Room) StartGame() error {
 		return fmt.Errorf("玩家数量不足,至少需要2名玩家")
 	}
 
+	// 重置牌堆，确保每次游戏都使用完整的52张牌
+	r.Deck.Reset()
+	fmt.Printf("[DEBUG] 房间 %d 牌堆重置完成，剩余牌数: %d\n", r.ID, r.Deck.Remaining())
 	// 洗牌
 	r.Deck.Shuffle()
+
+	// 清空玩家手牌
+	for _, player := range r.Players {
+		player.ClearCards()
+	}
 
 	// 扣除底注
 	for _, player := range r.Players {
@@ -322,11 +330,7 @@ func (r *Room) handleCheck(player *Player) error {
 func (r *Room) handleAllIn(player *Player) error {
 	amount := player.Chips
 
-	// 看牌者需要支付2倍
-	if player.Status == StatusChecked {
-		amount *= 2
-	}
-
+	// 玩家全押时，只能下注其实际拥有的筹码
 	player.Chips = 0
 	player.RoundBet += amount
 	r.Pot += amount

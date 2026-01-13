@@ -151,12 +151,7 @@ func (c *GameClient) DrawTable() {
 			if c.MyPlayer != nil && c.MyPlayer.Status != StatusChecked {
 				displayBet = c.GameInfo.CurrentSingleBet / 2
 			}
-			// 调试信息
-			if c.MyPlayer != nil {
-				fmt.Printf("  [调试] MyPlayer状态: %d, CurrentSingleBet: %d\n", c.MyPlayer.Status, c.GameInfo.CurrentSingleBet)
-			} else {
-				fmt.Printf("  [调试] MyPlayer为nil, CurrentSingleBet: %d\n", c.GameInfo.CurrentSingleBet)
-			}
+
 			fmt.Printf("  当前跟注: %d\n", displayBet)
 
 			// UI回合锁定：若不是自己的回合，显示等待状态

@@ -620,7 +620,12 @@ func (s *Server) handleAllIn(client *Client) {
 		return
 	}
 
-	client.Player.AllIn()
+	// 执行全押
+	if err := room.HandleAction(client.Player, ActionAllIn, nil); err != nil {
+		s.sendError(client, err.Error())
+		return
+	}
+
 	s.sendResponse(client, true, "全押成功", map[string]interface{}{
 		"chips":     client.Player.Chips,
 		"round_bet": client.Player.RoundBet,
