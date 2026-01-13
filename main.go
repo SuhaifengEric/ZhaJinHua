@@ -24,7 +24,7 @@ func main() {
 	case "2":
 		runInteractiveClient()
 	default:
-		fmt.Println("无效的选项")
+		fmt.Println("无效的选项哦")
 	}
 }
 
