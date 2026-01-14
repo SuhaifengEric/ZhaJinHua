@@ -134,6 +134,32 @@ func (r *Room) StartGame() error {
 	// 发牌
 	r.Deck.DealToPlayers(r.Players, 3)
 
+	// [DEBUG] 检查是否有重复发牌的情况
+	dealtCards := make(map[string]bool)
+	for _, player := range r.Players {
+		for _, card := range player.Cards {
+			cardKey := fmt.Sprintf("%d_%d", card.Suit, card.Rank)
+			if dealtCards[cardKey] {
+				fmt.Printf("[ERROR] 发现重复的牌: %s，玩家: %s\n", card.String(), player.Name)
+				// 打印所有玩家的手牌用于调试
+				for _, p := range r.Players {
+					fmt.Printf("[DEBUG] 玩家 %s 的手牌: ", p.Name)
+					for _, c := range p.Cards {
+						fmt.Printf("%s ", c.String())
+					}
+					fmt.Printf("\n")
+				}
+				return fmt.Errorf("发牌错误：出现重复的牌 %s", card.String())
+			}
+			dealtCards[cardKey] = true
+		}
+		fmt.Printf("[DEBUG] 玩家 %s 发到的牌: ", player.Name)
+		for _, card := range player.Cards {
+			fmt.Printf("%s ", card.String())
+		}
+		fmt.Printf("\n")
+	}
+
 	// 设置玩家状态为游戏中
 	for _, player := range r.Players {
 		player.Status = StatusPlaying

@@ -59,7 +59,17 @@ func (d *Deck) Remaining() int {
 
 // Reset 重置牌堆,重新生成52张牌
 func (d *Deck) Reset() {
-	*d = *NewDeck()
+	// 创建全新的切片，避免底层数组引用问题
+	d.cards = make([]Card, 0, 52)
+
+	suits := []Suit{Spade, Heart, Diamond, Club}
+	ranks := []Rank{Rank2, Rank3, Rank4, Rank5, Rank6, Rank7, Rank8, Rank9, Rank10, RankJack, RankQueen, RankKing, RankAce}
+
+	for _, suit := range suits {
+		for _, rank := range ranks {
+			d.cards = append(d.cards, NewCard(suit, rank))
+		}
+	}
 }
 
 // Peek 查看牌堆顶部的牌(不移除)

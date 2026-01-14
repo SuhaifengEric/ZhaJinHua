@@ -584,23 +584,9 @@ func (s *Server) handleCheck(client *Client) {
 	// 发送手牌给该玩家，格式化为客户端期望的格式
 	cardsData := make([]map[string]interface{}, 0, len(client.Player.Cards))
 	for _, card := range client.Player.Cards {
-		var suitSymbol string
-		switch card.Suit {
-		case Spade:
-			suitSymbol = "♠"
-		case Heart:
-			suitSymbol = "♥"
-		case Diamond:
-			suitSymbol = "♦"
-		case Club:
-			suitSymbol = "♣"
-		default:
-			suitSymbol = "♠"
-		}
-
 		cardsData = append(cardsData, map[string]interface{}{
-			"suit": suitSymbol,
-			"rank": card.Value,
+			"suit": int(card.Suit),  // 发送花色的数字值 (0=黑桃, 1=红桃, 2=方块, 3=梅花)
+			"rank": int(card.Rank),  // 发送点数的数字值
 		})
 	}
 
