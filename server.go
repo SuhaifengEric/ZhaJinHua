@@ -433,11 +433,15 @@ func (s *Server) handleBet(client *Client, msg Message) {
 			"chips":     client.Player.Chips,
 			"round_bet": client.Player.RoundBet,
 		})
+		// 广播加注消息给房间内其他玩家
+		s.Manager.BroadcastToRoom(NewBroadcastMessage("system", fmt.Sprintf("玩家 %s 加注 %d", client.Player.Name, int(amountFloat)), nil), room.ID)
 	} else {
 		s.sendResponse(client, true, "闷注成功", map[string]interface{}{
 			"chips":     client.Player.Chips,
 			"round_bet": client.Player.RoundBet,
 		})
+		// 广播闷注消息给房间内其他玩家
+		s.Manager.BroadcastToRoom(NewBroadcastMessage("system", fmt.Sprintf("玩家 %s 闷注 %d", client.Player.Name, int(amountFloat)), nil), room.ID)
 	}
 
 	// 广播游戏更新
@@ -507,6 +511,9 @@ func (s *Server) handleCall(client *Client) {
 		"round_bet": client.Player.RoundBet,
 	})
 
+	// 广播跟注消息给房间内其他玩家
+	s.Manager.BroadcastToRoom(NewBroadcastMessage("system", fmt.Sprintf("玩家 %s 跟注 %d", client.Player.Name, callAmount), nil), room.ID)
+
 	// 广播游戏更新
 	s.broadcastGameUpdate(room)
 }
@@ -539,6 +546,9 @@ func (s *Server) handleFold(client *Client) {
 
 	s.sendResponse(client, true, "弃牌成功", nil)
 
+	// 广播弃牌消息给房间内其他玩家
+	s.Manager.BroadcastToRoom(NewBroadcastMessage("system", fmt.Sprintf("玩家 %s 弃牌", client.Player.Name), nil), room.ID)
+
 	// 广播游戏更新
 	s.broadcastGameUpdate(room)
 }
@@ -570,7 +580,7 @@ func (s *Server) handleCheck(client *Client) {
 	}
 
 	client.Player.CheckCards()
-	
+
 	// 发送手牌给该玩家，格式化为客户端期望的格式
 	cardsData := make([]map[string]interface{}, 0, len(client.Player.Cards))
 	for _, card := range client.Player.Cards {
@@ -587,16 +597,19 @@ func (s *Server) handleCheck(client *Client) {
 		default:
 			suitSymbol = "♠"
 		}
-		
+
 		cardsData = append(cardsData, map[string]interface{}{
 			"suit": suitSymbol,
 			"rank": card.Value,
 		})
 	}
-	
+
 	s.sendResponse(client, true, "看牌成功", map[string]interface{}{
 		"cards": cardsData,
 	})
+
+	// 广播看牌消息给房间内其他玩家
+	s.Manager.BroadcastToRoom(NewBroadcastMessage("system", fmt.Sprintf("玩家 %s 看牌成功", client.Player.Name), nil), room.ID)
 
 	// 广播游戏更新(不包含手牌)
 	s.broadcastGameUpdate(room)
@@ -638,6 +651,9 @@ func (s *Server) handleAllIn(client *Client) {
 		"chips":     client.Player.Chips,
 		"round_bet": client.Player.RoundBet,
 	})
+
+	// 广播全押消息给房间内其他玩家
+	s.Manager.BroadcastToRoom(NewBroadcastMessage("system", fmt.Sprintf("玩家 %s 全押", client.Player.Name), nil), room.ID)
 
 	// 广播游戏更新
 	s.broadcastGameUpdate(room)
