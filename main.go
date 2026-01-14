@@ -8,6 +8,20 @@ import (
 )
 
 func main() {
+	// 支持命令行参数
+	if len(os.Args) > 1 {
+		cmd := os.Args[1]
+		switch cmd {
+		case "server":
+			runServer()
+			return
+		case "client":
+			runInteractiveClient()
+			return
+		}
+	}
+
+	// 交互式模式
 	fmt.Println("=== 炸金花游戏 ===")
 	fmt.Println("请选择模式:")
 	fmt.Println("1. 启动服务器")
@@ -32,8 +46,15 @@ func main() {
 func runServer() {
 	fmt.Println("=== 启动服务器 ===")
 
+	// 从环境变量获取端口，Render会自动设置PORT环境变量
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = "8080" // 默认端口
+	}
+	addr := ":" + port
+
 	// 创建服务器
-	server := NewServer(":8080", 10)
+	server := NewServer(addr, 10)
 
 	// 启动服务器
 	if err := server.Start(); err != nil {
@@ -41,7 +62,7 @@ func runServer() {
 		return
 	}
 
-	fmt.Println("服务器已启动，监听地址: :8080")
+	fmt.Printf("服务器已启动，监听地址: %s\n", addr)
 	fmt.Println("按 Ctrl+C 停止服务器")
 
 	// 保持运行
