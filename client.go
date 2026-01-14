@@ -39,6 +39,7 @@ type GameClient struct {
 	IsExiting bool         // 是否正在退出房间（等待服务器响应）
 	HasChecked bool        // 是否已经看过牌（持久化标记）
 	LastGameState string   // 上一局游戏状态，用于判断新游戏开始
+	drawTimer *time.Timer  // 延迟绘制定时器
 }
 
 // NewGameClient 创建新客户端
@@ -78,6 +79,21 @@ func (c *GameClient) drawLobby() {
 
 // DrawTable 绘制游戏界面
 func (c *GameClient) DrawTable() {
+	// 取消之前的定时器
+	if c.drawTimer != nil {
+		c.drawTimer.Stop()
+	}
+
+	// 启动新的定时器，50ms后绘制
+	// 这样可以在短时间内收到多条消息时只绘制一次，同时保持响应速度
+	c.drawTimer = time.AfterFunc(50*time.Millisecond, func() {
+		c.doDrawTable()
+	})
+}
+
+// doDrawTable 实际执行绘制
+func (c *GameClient) doDrawTable() {
+	c.drawTimer = nil
 	fmt.Print("\033[H\033[2J")
 
 	// 如果不在房间中，显示大厅视图
@@ -389,6 +405,9 @@ func (c *GameClient) handleResponse(resp Response) {
 	// 更新最后收到消息的时间
 	c.LastPing = time.Now()
 	
+	// 标记是否已经调用过 DrawTable
+	shouldDraw := true
+	
 	if resp.Success {
 		// 跳过心跳响应，不显示在日志中
 		if resp.Message == "pong" {
@@ -494,6 +513,8 @@ func (c *GameClient) handleResponse(resp Response) {
 						c.MsgLog = make([]string, 0, MaxLogSize)
 						// 强制重绘，此时会自动显示大厅视图
 						c.DrawTable()
+						// 已经调用过 DrawTable，不再在函数末尾调用
+						shouldDraw = false
 					} else if oldRoomID == 0 && newRoomID > 0 {
 						// 从大厅进入房间，清空消息日志
 						c.MsgLog = make([]string, 0, MaxLogSize)
@@ -533,7 +554,11 @@ func (c *GameClient) handleResponse(resp Response) {
 			c.AddLog(fmt.Sprintf("[错误] %s", resp.Message))
 		}
 	}
-	c.DrawTable()
+	
+	// 只在需要时绘制界面
+	if shouldDraw {
+		c.DrawTable()
+	}
 }
 
 // handleBroadcast 处理广播消息
@@ -658,6 +683,11 @@ func (c *GameClient) handleBroadcast(msg BroadcastMessage) {
 		// 只显示有意义的消息，不显示纯状态更新
 		if msg.Content != "" && msg.Content != "游戏状态更新" {
 			c.AddLog(fmt.Sprintf("[游戏] %s", msg.Content))
+		}
+		// 如果消息内容为空，说明只是数据更新，不需要刷新界面
+		// 这样可以避免在登录后重复绘制大厅
+		if msg.Content == "" {
+			return
 		}
 	default:
 		c.AddLog(fmt.Sprintf("[广播] 未知类型: %s: %s", msg.Type, msg.Content))
@@ -837,13 +867,8 @@ func (c *GameClient) HandleInput(input string) {
 		if err := c.Check(); err != nil {
 			c.AddLog(fmt.Sprintf("[错误] 看牌失败: %v", err))
 			c.DrawTable()
-		} else {
-			// 调试信息：打印看牌后的状态
-			if c.MyPlayer != nil {
-				// fmt.Printf("[DEBUG] 看牌后: MyPlayer.Status=%d\n", c.MyPlayer.Status)
-			}
-			c.DrawTable()
 		}
+		// 成功发送请求后，等待服务器响应/广播
 
 	case "v":
 		// 检查玩家是否已弃牌
@@ -869,9 +894,8 @@ func (c *GameClient) HandleInput(input string) {
 		if err := c.Compare(targetID); err != nil {
 			c.AddLog(fmt.Sprintf("[错误] 比牌失败: %v", err))
 			c.DrawTable()
-		} else {
-			c.DrawTable()
 		}
+		// 成功发送请求后，等待服务器响应/广播
 
 	case "c":
 		// 检查玩家是否已弃牌
@@ -884,9 +908,8 @@ func (c *GameClient) HandleInput(input string) {
 		if err := c.Call(); err != nil {
 			c.AddLog(fmt.Sprintf("[错误] 跟注失败: %v", err))
 			c.DrawTable()
-		} else {
-			c.DrawTable()
 		}
+		// 成功发送请求后，等待服务器响应/广播
 
 	case "b":
 		// 检查玩家是否已弃牌
@@ -906,9 +929,8 @@ func (c *GameClient) HandleInput(input string) {
 		if err := c.Bet(amount); err != nil {
 			c.AddLog(fmt.Sprintf("[错误] 闷注失败: %v", err))
 			c.DrawTable()
-		} else {
-			c.DrawTable()
 		}
+		// 成功发送请求后，等待服务器响应/广播
 
 	case "r":
 		// 检查玩家是否已弃牌
@@ -937,36 +959,32 @@ func (c *GameClient) HandleInput(input string) {
 		if err := c.Bet(amount); err != nil {
 			c.AddLog(fmt.Sprintf("[错误] 加注失败: %v", err))
 			c.DrawTable()
-		} else {
-			c.DrawTable()
 		}
+		// 成功发送请求后，等待服务器响应/广播
 
 	case "f":
 		// fmt.Printf("[DEBUG] 进入弃牌命令分支\n")
 		if err := c.Fold(); err != nil {
 			c.AddLog(fmt.Sprintf("[错误] 弃牌失败: %v", err))
 			c.DrawTable()
-		} else {
-			c.DrawTable()
 		}
+		// 成功发送请求后，等待服务器响应/广播
 
 	case "s":
 		// fmt.Printf("[DEBUG] 进入开始游戏命令分支\n")
 		if err := c.StartGame(); err != nil {
 			c.AddLog(fmt.Sprintf("[错误] 开始游戏失败: %v", err))
 			c.DrawTable()
-		} else {
-			c.DrawTable()
 		}
+		// 成功发送请求后，等待服务器响应/广播
 
 	case "exit":
 		// fmt.Printf("[DEBUG] 进入退出命令分支\n")
 		if err := c.Leave(); err != nil {
 			c.AddLog(fmt.Sprintf("[错误] 退出房间失败: %v", err))
 			c.DrawTable()
-		} else {
-			c.DrawTable()
 		}
+		// 成功发送请求后，等待服务器响应/广播
 
 	default:
 		// fmt.Printf("[DEBUG] 进入 default 分支，未知命令: '%s'\n", command)
@@ -975,6 +993,7 @@ func (c *GameClient) HandleInput(input string) {
 			c.AddLog(fmt.Sprintf("[错误] 发送聊天失败: %v", err))
 			c.DrawTable()
 		}
+		// 成功发送请求后，等待服务器响应/广播
 	}
 }
 
@@ -992,17 +1011,15 @@ func (c *GameClient) handleLobbyInput(input string) {
 		if err := c.ListRooms(); err != nil {
 			c.AddLog(fmt.Sprintf("[错误] 列出房间失败: %v", err))
 			c.DrawTable()
-		} else {
-			c.DrawTable()
 		}
+		// 成功发送请求后，等待服务器响应，handleResponse会调用DrawTable
 
 	case "n":
 		if err := c.CreateRoom(""); err != nil {
 			c.AddLog(fmt.Sprintf("[错误] 创建房间失败: %v", err))
 			c.DrawTable()
-		} else {
-			c.DrawTable()
 		}
+		// 成功发送请求后，等待服务器响应，handleResponse会调用DrawTable
 
 	case "exit":
 		c.Close()
@@ -1024,9 +1041,8 @@ func (c *GameClient) handleLobbyInput(input string) {
 		if err := c.JoinRoom(roomID); err != nil {
 			c.AddLog(fmt.Sprintf("[错误] 加入房间失败: %v", err))
 			c.DrawTable()
-		} else {
-			c.DrawTable()
 		}
+		// 成功发送请求后，等待服务器响应，handleResponse会调用DrawTable
 
 	default:
 		c.AddLog(fmt.Sprintf("[聊天] %s", input))
@@ -1034,6 +1050,7 @@ func (c *GameClient) handleLobbyInput(input string) {
 			c.AddLog(fmt.Sprintf("[错误] 发送聊天失败: %v", err))
 			c.DrawTable()
 		}
+		// 成功发送请求后，等待服务器响应，handleBroadcast会调用DrawTable
 	}
 }
 
