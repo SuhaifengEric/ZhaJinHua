@@ -39,6 +39,7 @@ type GameClient struct {
 	IsExiting bool         // 是否正在退出房间（等待服务器响应）
 	HasChecked bool        // 是否已经看过牌（持久化标记）
 	LastGameState string   // 上一局游戏状态，用于判断新游戏开始
+	LastWinAmount int      // 上一次获胜金额，用于防止重复打印游戏结束消息
 	drawTimer *time.Timer  // 延迟绘制定时器
 }
 
@@ -497,33 +498,35 @@ func (c *GameClient) handleResponse(resp Response) {
 					c.GameInfo.RoomID = newRoomID
 
 					// 如果退出房间（room_id为0），清理相关数据
-					if c.GameInfo.RoomID == 0 {
-						c.GameInfo.Players = []PlayerInfo{}
-						c.GameInfo.Pot = 0
-						c.GameInfo.CurrentBet = 0
-						c.GameInfo.CurrentTurn = 0
-						c.GameInfo.LastWinnerID = 0
-						c.MyCards = []Card{}
-						if c.MyPlayer != nil {
-							c.MyPlayer.Status = StatusWaiting
-						}
-						// 重置退出状态，允许在大厅中再次输入 exit 退出程序
-						c.IsExiting = false
-						// 清空消息日志，显示全新的大厅视图
-						c.MsgLog = make([]string, 0, MaxLogSize)
-						// 强制重绘，此时会自动显示大厅视图
-						c.DrawTable()
-						// 已经调用过 DrawTable，不再在函数末尾调用
-						shouldDraw = false
-					} else if oldRoomID == 0 && newRoomID > 0 {
-						// 从大厅进入房间，清空消息日志
-						c.MsgLog = make([]string, 0, MaxLogSize)
-						// 加入房间成功，重置退出状态
-						c.IsExiting = false
-					} else {
-						// 房间内的其他操作
-						c.IsExiting = false
-					}
+			if c.GameInfo.RoomID == 0 {
+				c.GameInfo.Players = []PlayerInfo{}
+				c.GameInfo.Pot = 0
+				c.GameInfo.CurrentBet = 0
+				c.GameInfo.CurrentTurn = 0
+				c.GameInfo.LastWinnerID = 0
+				c.LastWinAmount = 0 // 重置上一次获胜金额
+				c.MyCards = []Card{}
+				if c.MyPlayer != nil {
+					c.MyPlayer.Status = StatusWaiting
+				}
+				// 重置退出状态，允许在大厅中再次输入 exit 退出程序
+				c.IsExiting = false
+				// 清空消息日志，显示全新的大厅视图
+				c.MsgLog = make([]string, 0, MaxLogSize)
+				// 强制重绘，此时会自动显示大厅视图
+				c.DrawTable()
+				// 已经调用过 DrawTable，不再在函数末尾调用
+				shouldDraw = false
+			} else if oldRoomID == 0 && newRoomID > 0 {
+				// 从大厅进入房间，清空消息日志
+				c.MsgLog = make([]string, 0, MaxLogSize)
+				c.LastWinAmount = 0 // 重置上一次获胜金额
+				// 加入房间成功，重置退出状态
+				c.IsExiting = false
+			} else {
+				// 房间内的其他操作
+				c.IsExiting = false
+			}
 				}
 				if rooms, ok := dataMap["rooms"].([]interface{}); ok {
 					c.AddLog(fmt.Sprintf("[系统] 房间列表更新，共 %d 个房间", len(rooms)))
@@ -568,7 +571,7 @@ func (c *GameClient) handleBroadcast(msg BroadcastMessage) {
 		// 检查是否为比牌结果消息
 		if strings.Contains(msg.Content, "发起比牌") && strings.Contains(msg.Content, "战败出局") {
 			// 比牌结果用醒目的符号标注
-			c.AddLog(fmt.Sprintf("【比牌】%s", msg.Content))
+			c.AddLog(fmt.Sprintf("[系统] %s", msg.Content))
 			
 			// 如果自己是败者，UI 立即切换为 [已出局] 状态
 			if c.MyPlayer != nil && strings.Contains(msg.Content, c.MyPlayer.Name+" 战败出局") {
@@ -627,21 +630,25 @@ func (c *GameClient) handleBroadcast(msg BroadcastMessage) {
 				c.GameInfo.CurrentTurn = int(currentTurn)
 			}
 			if lastWinnerID, ok := data["last_winner_id"].(float64); ok {
-				c.GameInfo.LastWinnerID = int(lastWinnerID)
-				// 查找获胜者并显示胜利信息
-				if lastWinnerID > 0 && c.GameInfo.GameStatus == "waiting" {
-					var winAmount int
-					if winAmountData, ok := data["last_win_amount"].(float64); ok {
-						winAmount = int(winAmountData)
-					}
+			c.GameInfo.LastWinnerID = int(lastWinnerID)
+			// 查找获胜者并显示胜利信息
+			if lastWinnerID > 0 && c.GameInfo.GameStatus == "waiting" {
+				var winAmount int
+				if winAmountData, ok := data["last_win_amount"].(float64); ok {
+					winAmount = int(winAmountData)
+				}
+				// 只有当获胜金额发生变化时才打印消息，防止重复打印
+				if winAmount != c.LastWinAmount {
 					for _, player := range c.GameInfo.Players {
 						if player.ID == int(lastWinnerID) {
-							c.AddLog(fmt.Sprintf("【游戏结束】%s 获胜，获得 %d 筹码", player.Name, winAmount))
+							c.AddLog(fmt.Sprintf("[系统] 游戏结束，%s 获胜，获得 %d 筹码", player.Name, winAmount))
+							c.LastWinAmount = winAmount // 更新上一次获胜金额
 							break
 						}
 					}
 				}
 			}
+		}
 			if masterID, ok := data["master_id"].(float64); ok {
 				c.GameInfo.MasterID = int(masterID)
 			}

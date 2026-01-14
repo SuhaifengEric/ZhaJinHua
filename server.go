@@ -722,15 +722,7 @@ func (s *Server) handleCompare(client *Client, msg Message) {
 	client.Player.RoundBet += compareCost
 	room.Pot += compareCost
 
-	// fmt.Printf("[DEBUG] 调用room.HandleAction进行比牌\n")
-	if err := room.HandleAction(client.Player, ActionCompare, payload); err != nil {
-		// fmt.Printf("[DEBUG] room.HandleAction返回错误: %v\n", err)
-		s.sendError(client, err.Error())
-		return
-	}
-	// fmt.Printf("[DEBUG] room.HandleAction调用成功\n")
-
-	// 判断谁是输家
+	// 先判断谁是输家，记录结果，避免后续操作清空手牌导致比较结果错误
 	result := CompareHands(client.Player, target)
 	var loserName string
 	if result == 1 {
@@ -740,6 +732,19 @@ func (s *Server) handleCompare(client *Client, msg Message) {
 	} else {
 		loserName = client.Player.Name
 	}
+	
+	// 调试日志：打印比牌结果
+	fmt.Printf("[DEBUG] 比牌结果: %s vs %s, result=%d, loser=%s\n", 
+		client.Player.Name, target.Name, result, loserName)
+
+	// 调用房间处理比牌逻辑
+	// fmt.Printf("[DEBUG] 调用room.HandleAction进行比牌\n")
+	if err := room.HandleAction(client.Player, ActionCompare, payload); err != nil {
+		// fmt.Printf("[DEBUG] room.HandleAction返回错误: %v\n", err)
+		s.sendError(client, err.Error())
+		return
+	}
+	// fmt.Printf("[DEBUG] room.HandleAction调用成功\n")
 
 	// 广播比牌结果（不包含手牌内容），只向房间内的玩家发送
 	broadcastContent := fmt.Sprintf("玩家 %s 发起比牌，玩家 %s 战败出局！", client.Player.Name, loserName)

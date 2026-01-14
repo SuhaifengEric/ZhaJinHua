@@ -1,11 +1,13 @@
 # 可执行文件
 *.exe
+*.exe~
 
 # 编译产物
 bin/
 
 # IDE和编辑器配置
 .trae/
+.claude/
 
 # 操作系统文件
 Thumbs.db
@@ -30,3 +32,11 @@ vendor/
 .env
 .env.local
 .env.*.local
+
+# 临时文件
+tmpclaude-*
+*.tmp
+*.temp
+
+# 其他非代码文件
+*.md~
