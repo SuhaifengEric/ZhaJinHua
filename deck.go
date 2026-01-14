@@ -87,11 +87,15 @@ func (d *Deck) String() string {
 }
 
 // DealToPlayers 给多个玩家发牌,每个玩家发指定数量的牌
+// 采用轮流发牌的方式，确保牌的随机性和公平性
 func (d *Deck) DealToPlayers(players []*Player, cardsPerPlayer int) {
-	for _, player := range players {
-		cards := d.Deal(cardsPerPlayer)
-		for _, card := range cards {
-			player.AddCard(card)
+	// 外层循环是每一轮发牌
+	for i := 0; i < cardsPerPlayer; i++ {
+		// 内层循环是给每个玩家发一张牌
+		for _, player := range players {
+			if card, ok := d.DealOneCard(); ok {
+				player.AddCard(card)
+			}
 		}
 	}
 }
