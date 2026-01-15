@@ -16,34 +16,47 @@
 ### 环境要求
 
 - Go 1.18+ （用于编译）
-- Windows/Linux/macOS
+- 操作系统：Windows / Linux / macOS
 
 ### 编译运行
 
 #### 方式一：直接运行编译好的可执行文件
 
+**Windows**
 ```bash
 # 运行主程序
-./AI_jinhua.exe
+.\AI_jinhua.exe
+```
+
+**macOS / Linux**
+```bash
+# 赋予执行权限（如果需要）
+chmod +x AI_jinhua
+
+# 运行主程序
+./AI_jinhua
 ```
 
 #### 方式二：源码编译
 
 ```bash
 # 编译主程序
-go build -o AI_jinhua.exe main.go
+go build -o AI_jinhua main.go
+# 注意：Windows下会自动生成 AI_jinhua.exe，macOS/Linux下生成 AI_jinhua
 
-# 运行主程序
-./AI_jinhua.exe
+# 运行主程序 (Windows)
+.\AI_jinhua.exe
+
+# 运行主程序 (macOS/Linux)
+./AI_jinhua
 ```
 
 ### 使用方法
 
 #### 方式1：直接启动（推荐）
 
+**Windows (PowerShell)**
 ```bash
-# Windows PowerShell中使用相对路径
-
 # 直接启动服务器
 .\AI_jinhua.exe server
 
@@ -51,9 +64,18 @@ go build -o AI_jinhua.exe main.go
 .\AI_jinhua.exe client
 ```
 
+**macOS / Linux (Terminal)**
+```bash
+# 直接启动服务器
+./AI_jinhua server
+
+# 直接启动客户端
+./AI_jinhua client
+```
+
 #### 方式2：交互式选择
 
-1. **启动程序**：运行`AI_jinhua.exe`
+1. **启动程序**：运行程序（Windows下`AI_jinhua.exe`，macOS/Linux下`./AI_jinhua`）
 2. **选择模式**：
    - 输入`1`启动服务器
    - 输入`2`启动交互式客户端
@@ -168,26 +190,40 @@ go build -o AI_jinhua.exe main.go
 
 ```bash
 # 编译主程序
-go build -o AI_jinhua.exe main.go
+go build -o AI_jinhua main.go
 
 # 单独编译服务器
-go build -o server.exe server.go
+go build -o server server.go
 
 # 单独编译客户端
-go build -o client.exe client.go
+go build -o client client.go
 ```
 
 ### 运行服务器
 
+**Windows**
 ```bash
-./AI_jinhua.exe
+.\AI_jinhua.exe
+# 然后输入1启动服务器
+```
+
+**macOS / Linux**
+```bash
+./AI_jinhua
 # 然后输入1启动服务器
 ```
 
 ### 运行客户端
 
+**Windows**
 ```bash
-./AI_jinhua.exe
+.\AI_jinhua.exe
+# 然后输入2启动客户端
+```
+
+**macOS / Linux**
+```bash
+./AI_jinhua
 # 然后输入2启动客户端
 ```
 
