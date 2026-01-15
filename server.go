@@ -275,6 +275,8 @@ func (s *Server) handleMessage(client *Client, msg Message) {
 			}
 
 			// 2. 给退出的玩家发一个确认响应
+			// 退出房间时，重置玩家状态为等待中，并清空手牌
+			client.Player.ResetRound()
 			client.SendChan <- NewMessage(ActionResponse, map[string]interface{}{
 				"success": true,
 				"message": "已退出房间",
