@@ -1,41 +1,49 @@
 package main
 
 import (
-	"bufio"
-	"encoding/json"
 	"fmt"
-	"net"
+	"net/http"
 	"sync"
 	"time"
+
+	"github.com/gorilla/websocket"
 )
+
+// WebSocket 升级器
+var upgrader = websocket.Upgrader{
+	ReadBufferSize:  1024,
+	WriteBufferSize: 1024,
+	CheckOrigin: func(r *http.Request) bool {
+		return true // 允许所有来源
+	},
+}
 
 // Client 客户端连接
 type Client struct {
-	Conn       net.Conn     // TCP连接
-	Player     *Player       // 玩家信息
-	ID         int           // 客户端ID
-	IsOnline   bool          // 是否在线
-	SendChan   chan Message   // 发送消息通道
-	LastActive time.Time     // 最后活跃时间
+	Conn       *websocket.Conn // WebSocket连接
+	Player     *Player         // 玩家信息
+	ID         int             // 客户端ID
+	IsOnline   bool            // 是否在线
+	SendChan   chan Message    // 发送消息通道
+	LastActive time.Time       // 最后活跃时间
 }
 
 // ClientManager 客户端管理器
 type ClientManager struct {
 	clients map[int]*Client // 客户端映射
-	mu      sync.RWMutex  // 读写锁
-	nextID  int           // 下一个客户端ID
+	mu      sync.RWMutex    // 读写锁
+	nextID  int             // 下一个客户端ID
 }
 
 // Server 服务器结构体
 type Server struct {
-	Listener   net.Listener         // 监听器
-	Manager    *ClientManager       // 客户端管理器
-	Addr       string              // 监听地址
-	Rooms     map[int]*Room       // 房间映射
-	NextRoomID int                 // 下一个房间ID
-	RoomCounter int                 // 房间计数器
-	Ante       int                 // 底注金额
-	mu          sync.RWMutex         // 读写锁
+	Manager     *ClientManager // 客户端管理器
+	Addr        string         // 监听地址
+	Rooms       map[int]*Room  // 房间映射
+	NextRoomID  int            // 下一个房间ID
+	RoomCounter int            // 房间计数器
+	Ante        int            // 底注金额
+	mu          sync.RWMutex   // 读写锁
 }
 
 // NewServer 创建新服务器
@@ -46,7 +54,7 @@ func NewServer(addr string, ante int) *Server {
 			nextID:  1,
 		},
 		Addr:       addr,
-		Rooms:     make(map[int]*Room),
+		Rooms:      make(map[int]*Room),
 		NextRoomID: 1,
 		Ante:       ante,
 	}
@@ -54,51 +62,43 @@ func NewServer(addr string, ante int) *Server {
 
 // Start 启动服务器
 func (s *Server) Start() error {
-	var err error
-	s.Listener, err = net.Listen("tcp", s.Addr)
-	if err != nil {
-		return fmt.Errorf("监听失败: %w", err)
-	}
+	// 设置HTTP路由
+	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("炸金花游戏服务器运行中..."))
+	})
 
-	// 启动接收连接的协程
-	go s.acceptConnections()
+	http.HandleFunc("/ws", s.handleWebSocket)
 
 	fmt.Printf("服务器启动,监听地址: %s\n", s.Addr)
-
-	// 等待中断信号，保持服务器运行
-	// 注意：这里不能直接返回，否则服务器会立即退出
-	// 主函数中的 runServer 会处理阻塞
-	return nil
+	return http.ListenAndServe(s.Addr, nil)
 }
 
-// acceptConnections 接收客户端连接
-func (s *Server) acceptConnections() {
-	for {
-		conn, err := s.Listener.Accept()
-		if err != nil {
-			fmt.Printf("接受连接失败: %v\n", err)
-			continue
-		}
-
-		client := &Client{
-			Conn:       conn,
-			ID:         s.Manager.nextID,
-			IsOnline:   true,
-			SendChan:   make(chan Message, 100),
-			LastActive: time.Now(),
-		}
-		s.Manager.nextID++
-
-		s.Manager.AddClient(client)
-
-		fmt.Printf("新客户端连接: %s, ID: %d\n", conn.RemoteAddr(), client.ID)
-
-		// 启动发送消息的协程
-		go client.writeLoop()
-
-		// 为每个客户端启动处理协程
-		go s.handleClient(client)
+// handleWebSocket 处理WebSocket连接
+func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
+	conn, err := upgrader.Upgrade(w, r, nil)
+	if err != nil {
+		fmt.Printf("升级WebSocket失败: %v\n", err)
+		return
 	}
+
+	client := &Client{
+		Conn:       conn,
+		ID:         s.Manager.nextID,
+		IsOnline:   true,
+		SendChan:   make(chan Message, 100),
+		LastActive: time.Now(),
+	}
+	s.Manager.nextID++
+
+	s.Manager.AddClient(client)
+
+	fmt.Printf("新客户端连接: %s, ID: %d\n", conn.RemoteAddr(), client.ID)
+
+	// 启动发送消息的协程
+	go client.writeLoop()
+
+	// 启动处理消息的协程
+	go s.handleClient(client)
 }
 
 // handleClient 处理客户端消息
@@ -155,30 +155,21 @@ func (s *Server) handleClient(client *Client) {
 	// 启动心跳检测协程
 	go s.heartbeatCheck(client)
 
-	// 使用 Scanner 按行读取消息
-	scanner := bufio.NewScanner(client.Conn)
-	for scanner.Scan() {
+	for {
+		// 读取JSON消息
+		var msg Message
+		err := client.Conn.ReadJSON(&msg)
+		if err != nil {
+			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
+				fmt.Printf("读取消息失败: %v\n", err)
+			}
+			break
+		}
+
 		// 更新最后活跃时间
 		client.LastActive = time.Now()
 
-		line := scanner.Text()
-		if line == "" {
-			continue
-		}
-
-		// 解析JSON消息
-		var msg Message
-		err := json.Unmarshal([]byte(line), &msg)
-		if err != nil {
-			fmt.Printf("解析消息失败: %v, 内容: %s\n", err, line)
-			continue
-		}
-
 		s.handleMessage(client, msg)
-	}
-
-	if err := scanner.Err(); err != nil {
-		fmt.Printf("读取消息失败: %v\n", err)
 	}
 }
 
@@ -189,17 +180,7 @@ func (c *Client) writeLoop() {
 			break
 		}
 
-		// 编码为JSON
-		data, err := json.Marshal(msg)
-		if err != nil {
-			fmt.Printf("编码消息失败: %v\n", err)
-			continue
-		}
-
-		// 添加换行符作为消息分隔符
-		data = append(data, '\n')
-
-		_, err = c.Conn.Write(data)
+		err := c.Conn.WriteJSON(msg)
 		if err != nil {
 			fmt.Printf("发送消息失败: %v\n", err)
 			c.IsOnline = false
@@ -255,14 +236,14 @@ func (s *Server) handleMessage(client *Client, msg Message) {
 	case ActionLeave:
 		if client.Player.Room != nil {
 			room := client.Player.Room
-			
+
 			// 检查是否是房主退出
 			isMasterLeaving := room.MasterID == client.Player.ID
 			leftPlayerName := client.Player.Name
-			
+
 			room.RemovePlayer(client.Player.ID)
 			client.Player.Room = nil
-			
+
 			// 如果房间没有玩家了，直接删除房间
 			if room.GetPlayerCount() == 0 {
 				s.RemoveRoom(room.ID)
@@ -276,7 +257,7 @@ func (s *Server) handleMessage(client *Client, msg Message) {
 				})
 				return
 			}
-			
+
 			// 如果房主退出且房间还有玩家，转移房主
 			if isMasterLeaving {
 				room.MasterID = room.Players[0].ID
@@ -292,7 +273,7 @@ func (s *Server) handleMessage(client *Client, msg Message) {
 				}
 				s.Manager.mu.RUnlock()
 			}
-			
+
 			// 2. 给退出的玩家发一个确认响应
 			client.SendChan <- NewMessage(ActionResponse, map[string]interface{}{
 				"success": true,
@@ -301,7 +282,7 @@ func (s *Server) handleMessage(client *Client, msg Message) {
 					"room_id": room.ID, // 告诉客户端仍在房间里
 				},
 			})
-			
+
 			// 3. 给房间剩下的人发广播
 			s.broadcastGameUpdate(room)
 		}
@@ -585,8 +566,8 @@ func (s *Server) handleCheck(client *Client) {
 	cardsData := make([]map[string]interface{}, 0, len(client.Player.Cards))
 	for _, card := range client.Player.Cards {
 		cardsData = append(cardsData, map[string]interface{}{
-			"suit": int(card.Suit),  // 发送花色的数字值 (0=黑桃, 1=红桃, 2=方块, 3=梅花)
-			"rank": int(card.Rank),  // 发送点数的数字值
+			"suit": int(card.Suit), // 发送花色的数字值 (0=黑桃, 1=红桃, 2=方块, 3=梅花)
+			"rank": int(card.Rank), // 发送点数的数字值
 		})
 	}
 
@@ -651,7 +632,7 @@ func (s *Server) handleCompare(client *Client, msg Message) {
 		s.sendError(client, "请先登录")
 		return
 	}
-	
+
 	// fmt.Printf("[DEBUG] 服务器收到比牌请求，玩家ID=%d\n", client.Player.ID)
 
 	room := client.Player.Room
@@ -732,9 +713,9 @@ func (s *Server) handleCompare(client *Client, msg Message) {
 	} else {
 		loserName = client.Player.Name
 	}
-	
+
 	// 调试日志：打印比牌结果
-	fmt.Printf("[DEBUG] 比牌结果: %s vs %s, result=%d, loser=%s\n", 
+	fmt.Printf("[DEBUG] 比牌结果: %s vs %s, result=%d, loser=%s\n",
 		client.Player.Name, target.Name, result, loserName)
 
 	// 调用房间处理比牌逻辑
@@ -757,14 +738,12 @@ func (s *Server) handleCompare(client *Client, msg Message) {
 	s.broadcastGameUpdate(room)
 }
 
-
-
 // sendResponse 发送响应
 func (s *Server) sendResponse(client *Client, success bool, message string, data interface{}) {
 	response := NewResponse(success, message, data)
 	// 将Response包装为Message
 	msg := NewMessage("response", response)
-	
+
 	// 静默处理连接错误
 	select {
 	case client.SendChan <- msg:
@@ -801,11 +780,11 @@ func (s *Server) handleListRooms(client *Client) {
 		}
 
 		rooms = append(rooms, RoomBrief{
-			ID:         room.ID,
-			MasterID:   room.MasterID,
-			MasterName: masterName,
+			ID:          room.ID,
+			MasterID:    room.MasterID,
+			MasterName:  masterName,
 			PlayerCount: room.GetPlayerCount(),
-			Status:     status,
+			Status:      status,
 		})
 	}
 
@@ -993,7 +972,7 @@ func (cm *ClientManager) Broadcast(msg BroadcastMessage) {
 			select {
 			case client.SendChan <- wrappedMsg:
 			default:
-			// 发送通道已满,跳过该客户端
+				// 发送通道已满,跳过该客户端
 			}
 		}
 	}
@@ -1016,7 +995,7 @@ func (cm *ClientManager) BroadcastToRoom(msg BroadcastMessage, roomID int) {
 			select {
 			case client.SendChan <- wrappedMsg:
 			default:
-			// 发送通道已满,跳过该客户端
+				// 发送通道已满,跳过该客户端
 			}
 		}
 	}
@@ -1039,7 +1018,7 @@ func (cm *ClientManager) BroadcastToLobby(msg BroadcastMessage) {
 			select {
 			case client.SendChan <- wrappedMsg:
 			default:
-			// 发送通道已满,跳过该客户端
+				// 发送通道已满,跳过该客户端
 			}
 		}
 	}
@@ -1108,8 +1087,6 @@ func (s *Server) broadcastGameUpdate(room *Room) {
 
 // Stop 停止服务器
 func (s *Server) Stop() error {
-	if s.Listener != nil {
-		return s.Listener.Close()
-	}
+	// 简单的HTTP服务不需要手动Close，直接返回nil
 	return nil
 }

@@ -2,14 +2,15 @@ package main
 
 import (
 	"bufio"
-	"encoding/json"
 	"fmt"
 	"math/rand"
-	"net"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/gorilla/websocket"
 )
 
 const (
@@ -27,27 +28,26 @@ func padding(str string, length int) string {
 
 // GameClient 游戏客户端
 type GameClient struct {
-	Conn      net.Conn     // TCP连接
-	Reader    *bufio.Reader // 读取器
-	IsOnline  bool         // 是否在线
-	PlayerID  int          // 玩家ID
-	MsgLog    []string     // 消息日志
-	GameInfo  GameInfo     // 游戏信息
-	MyPlayer  *PlayerInfo  // 我的玩家信息
-	MyCards   []Card       // 我的手牌
-	LastPing  time.Time    // 最后心跳时间
-	IsExiting bool         // 是否正在退出房间（等待服务器响应）
-	HasChecked bool        // 是否已经看过牌（持久化标记）
-	LastGameState string   // 上一局游戏状态，用于判断新游戏开始
-	LastWinAmount int      // 上一次获胜金额，用于防止重复打印游戏结束消息
-	drawTimer *time.Timer  // 延迟绘制定时器
+	Conn          *websocket.Conn // WebSocket连接
+	IsOnline      bool            // 是否在线
+	PlayerID      int             // 玩家ID
+	MsgLog        []string        // 消息日志
+	GameInfo      GameInfo        // 游戏信息
+	MyPlayer      *PlayerInfo     // 我的玩家信息
+	MyCards       []Card          // 我的手牌
+	LastPing      time.Time       // 最后心跳时间
+	IsExiting     bool            // 是否正在退出房间（等待服务器响应）
+	HasChecked    bool            // 是否已经看过牌（持久化标记）
+	LastGameState string          // 上一局游戏状态，用于判断新游戏开始
+	LastWinAmount int             // 上一次获胜金额，用于防止重复打印游戏结束消息
+	drawTimer     *time.Timer     // 延迟绘制定时器
 }
 
 // NewGameClient 创建新客户端
 func NewGameClient() *GameClient {
 	return &GameClient{
 		IsOnline: false,
-		MsgLog:  make([]string, 0, MaxLogSize),
+		MsgLog:   make([]string, 0, MaxLogSize),
 	}
 }
 
@@ -195,7 +195,7 @@ func (c *GameClient) doDrawTable() {
 	}
 
 	fmt.Println("────────────────────────────────────────────────────────────────")
-	
+
 	// 根据玩家状态动态显示指令提示
 	if c.MyPlayer != nil && c.GameInfo.GameStatus == "playing" {
 		// 只有轮到玩家时才显示操作提示
@@ -239,13 +239,32 @@ func getStatusName(status PlayerStatus) string {
 
 // Connect 连接服务器
 func (c *GameClient) Connect(addr string) error {
-	conn, err := net.Dial("tcp", addr)
+	// 解析地址，如果包含scheme则直接使用，否则添加ws://前缀
+	u := url.URL{Scheme: "ws", Host: addr, Path: "/ws"}
+	if strings.Contains(addr, "://") {
+		parsed, err := url.Parse(addr)
+		if err != nil {
+			return fmt.Errorf("解析地址失败: %w", err)
+		}
+		u = *parsed
+		if u.Scheme == "http" {
+			u.Scheme = "ws"
+		} else if u.Scheme == "https" {
+			u.Scheme = "wss"
+		}
+		if !strings.HasSuffix(u.Path, "/ws") {
+			u.Path = "/ws"
+		}
+	}
+
+	fmt.Printf("正在连接到服务器: %s\n", u.String())
+
+	conn, _, err := websocket.DefaultDialer.Dial(u.String(), nil)
 	if err != nil {
 		return fmt.Errorf("连接服务器失败: %w", err)
 	}
 
 	c.Conn = conn
-	c.Reader = bufio.NewReader(conn)
 	c.IsOnline = true
 
 	fmt.Printf("已连接到服务器: %s\n", addr)
@@ -258,19 +277,7 @@ func (c *GameClient) Send(msg Message) error {
 		return fmt.Errorf("客户端未连接")
 	}
 
-	// 编码为JSON
-	data, err := json.Marshal(msg)
-	if err != nil {
-		return fmt.Errorf("编码消息失败: %w", err)
-	}
-
-	// 调试信息：打印发送的消息
-	// fmt.Printf("[DEBUG] 发送消息: %s\n", string(data))
-
-	// 添加换行符作为消息分隔符
-	data = append(data, '\n')
-
-	_, err = c.Conn.Write(data)
+	err := c.Conn.WriteJSON(msg)
 	if err != nil {
 		return fmt.Errorf("发送消息失败: %w", err)
 	}
@@ -280,48 +287,30 @@ func (c *GameClient) Send(msg Message) error {
 
 // Receive 接收消息(在独立协程中运行)
 func (c *GameClient) Receive() {
-	scanner := bufio.NewScanner(c.Reader)
-
-	for scanner.Scan() {
-		line := scanner.Text()
-		if line == "" {
-			continue
-		}
-
-		// 调试信息：打印接收到的原始消息
-		// fmt.Printf("[DEBUG] 收到消息: %s\n", line)
-
-		// 解析JSON消息
+	for {
 		var msg interface{}
-		err := json.Unmarshal([]byte(line), &msg)
+		err := c.Conn.ReadJSON(&msg)
 		if err != nil {
-			fmt.Printf("解析消息失败: %v, 内容: %s\n", err, line)
-			continue
+			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
+				fmt.Printf("连接意外断开: %v\n", err)
+			}
+			break
 		}
 
 		c.handleMessage(msg)
 	}
 
-	if err := scanner.Err(); err != nil {
-		// 检查是否为玩家主动退出
-		if !c.IsOnline {
-			// 玩家主动退出，优雅关闭，不报错
-			return
-		} else {
-			// 连接意外断开，提示用户并退出
-				fmt.Println("\n=== 服务器连接已断开 ===")
-				fmt.Println("心跳超时，服务器连接已断开，程序将退出。")
-				c.IsOnline = false
-				c.Close()
-				os.Exit(0)
-		}
+	// 检查是否为玩家主动退出
+	if !c.IsOnline {
+		// 玩家主动退出，优雅关闭，不报错
+		return
 	} else {
-		// 连接正常关闭（服务器主动断开）
-			fmt.Println("\n=== 服务器连接已断开 ===")
-			fmt.Println("服务器已关闭连接，程序将退出。")
-			c.IsOnline = false
-			c.Close()
-			os.Exit(0)
+		// 连接意外断开，提示用户并退出
+		fmt.Println("\n=== 服务器连接已断开 ===")
+		fmt.Println("连接已断开，程序将退出。")
+		c.IsOnline = false
+		c.Close()
+		os.Exit(0)
 	}
 }
 
@@ -329,7 +318,7 @@ func (c *GameClient) Receive() {
 func (c *GameClient) handleMessage(msg interface{}) {
 	// 更新最后收到消息的时间
 	c.LastPing = time.Now()
-	
+
 	msgMap, ok := msg.(map[string]interface{})
 	if !ok {
 		fmt.Printf("未知消息类型: %v\n", msg)
@@ -343,7 +332,7 @@ func (c *GameClient) handleMessage(msg interface{}) {
 	}
 
 	payload := msgMap["payload"]
-	
+
 	// fmt.Printf("[DEBUG] handleMessage: action=%s\n", action)
 
 	switch action {
@@ -355,7 +344,7 @@ func (c *GameClient) handleMessage(msg interface{}) {
 			if d, ok := resp["data"]; ok {
 				data = d
 			}
-			
+
 			// 检查是否为 leave 动作的响应
 			if success && message == "已退出房间" {
 				c.GameInfo = GameInfo{
@@ -375,7 +364,7 @@ func (c *GameClient) handleMessage(msg interface{}) {
 				c.DrawTable()
 				return
 			}
-			
+
 			c.handleResponse(Response{
 				Success: success,
 				Message: message,
@@ -405,16 +394,16 @@ func (c *GameClient) handleMessage(msg interface{}) {
 func (c *GameClient) handleResponse(resp Response) {
 	// 更新最后收到消息的时间
 	c.LastPing = time.Now()
-	
+
 	// 标记是否已经调用过 DrawTable
 	shouldDraw := true
-	
+
 	if resp.Success {
 		// 跳过心跳响应，不显示在日志中
 		if resp.Message == "pong" {
 			return
 		}
-		
+
 		c.AddLog(fmt.Sprintf("[成功] %s", resp.Message))
 		if resp.Data != nil {
 			if dataMap, ok := resp.Data.(map[string]interface{}); ok {
@@ -434,13 +423,13 @@ func (c *GameClient) handleResponse(resp Response) {
 							if s, ok := cardMap["suit"].(float64); ok {
 								suit = Suit(int(s))
 							}
-							
+
 							// 转换点数 (从数字转换)
 							var rank Rank
 							if r, ok := cardMap["rank"].(float64); ok {
 								rank = Rank(int(r))
 							}
-							
+
 							c.MyCards = append(c.MyCards, Card{
 								Suit:  suit,
 								Rank:  rank,
@@ -451,7 +440,7 @@ func (c *GameClient) handleResponse(resp Response) {
 					// 看牌成功：更新玩家状态为已看牌（仅当确实收到手牌数据时）
 					if c.MyPlayer != nil {
 						c.MyPlayer.Status = StatusChecked
-						c.HasChecked = true  // 持久化标记已看牌
+						c.HasChecked = true // 持久化标记已看牌
 					}
 				}
 				if playerData, ok := dataMap["player"].(map[string]interface{}); ok {
@@ -498,35 +487,35 @@ func (c *GameClient) handleResponse(resp Response) {
 					c.GameInfo.RoomID = newRoomID
 
 					// 如果退出房间（room_id为0），清理相关数据
-			if c.GameInfo.RoomID == 0 {
-				c.GameInfo.Players = []PlayerInfo{}
-				c.GameInfo.Pot = 0
-				c.GameInfo.CurrentBet = 0
-				c.GameInfo.CurrentTurn = 0
-				c.GameInfo.LastWinnerID = 0
-				c.LastWinAmount = 0 // 重置上一次获胜金额
-				c.MyCards = []Card{}
-				if c.MyPlayer != nil {
-					c.MyPlayer.Status = StatusWaiting
-				}
-				// 重置退出状态，允许在大厅中再次输入 exit 退出程序
-				c.IsExiting = false
-				// 清空消息日志，显示全新的大厅视图
-				c.MsgLog = make([]string, 0, MaxLogSize)
-				// 强制重绘，此时会自动显示大厅视图
-				c.DrawTable()
-				// 已经调用过 DrawTable，不再在函数末尾调用
-				shouldDraw = false
-			} else if oldRoomID == 0 && newRoomID > 0 {
-				// 从大厅进入房间，清空消息日志
-				c.MsgLog = make([]string, 0, MaxLogSize)
-				c.LastWinAmount = 0 // 重置上一次获胜金额
-				// 加入房间成功，重置退出状态
-				c.IsExiting = false
-			} else {
-				// 房间内的其他操作
-				c.IsExiting = false
-			}
+					if c.GameInfo.RoomID == 0 {
+						c.GameInfo.Players = []PlayerInfo{}
+						c.GameInfo.Pot = 0
+						c.GameInfo.CurrentBet = 0
+						c.GameInfo.CurrentTurn = 0
+						c.GameInfo.LastWinnerID = 0
+						c.LastWinAmount = 0 // 重置上一次获胜金额
+						c.MyCards = []Card{}
+						if c.MyPlayer != nil {
+							c.MyPlayer.Status = StatusWaiting
+						}
+						// 重置退出状态，允许在大厅中再次输入 exit 退出程序
+						c.IsExiting = false
+						// 清空消息日志，显示全新的大厅视图
+						c.MsgLog = make([]string, 0, MaxLogSize)
+						// 强制重绘，此时会自动显示大厅视图
+						c.DrawTable()
+						// 已经调用过 DrawTable，不再在函数末尾调用
+						shouldDraw = false
+					} else if oldRoomID == 0 && newRoomID > 0 {
+						// 从大厅进入房间，清空消息日志
+						c.MsgLog = make([]string, 0, MaxLogSize)
+						c.LastWinAmount = 0 // 重置上一次获胜金额
+						// 加入房间成功，重置退出状态
+						c.IsExiting = false
+					} else {
+						// 房间内的其他操作
+						c.IsExiting = false
+					}
 				}
 				if rooms, ok := dataMap["rooms"].([]interface{}); ok {
 					c.AddLog(fmt.Sprintf("[系统] 房间列表更新，共 %d 个房间", len(rooms)))
@@ -557,7 +546,7 @@ func (c *GameClient) handleResponse(resp Response) {
 			c.AddLog(fmt.Sprintf("[错误] %s", resp.Message))
 		}
 	}
-	
+
 	// 只在需要时绘制界面
 	if shouldDraw {
 		c.DrawTable()
@@ -572,7 +561,7 @@ func (c *GameClient) handleBroadcast(msg BroadcastMessage) {
 		if strings.Contains(msg.Content, "发起比牌") && strings.Contains(msg.Content, "战败出局") {
 			// 比牌结果用醒目的符号标注
 			c.AddLog(fmt.Sprintf("[系统] %s", msg.Content))
-			
+
 			// 如果自己是败者，UI 立即切换为 [已出局] 状态
 			if c.MyPlayer != nil && strings.Contains(msg.Content, c.MyPlayer.Name+" 战败出局") {
 				c.MyPlayer.Status = StatusFolded
@@ -580,7 +569,7 @@ func (c *GameClient) handleBroadcast(msg BroadcastMessage) {
 		} else if strings.Contains(msg.Content, "房主") && strings.Contains(msg.Content, "退出") {
 			// 房主退出消息
 			c.AddLog(fmt.Sprintf("[系统] %s", msg.Content))
-			
+
 			// 从消息中提取新房主ID
 			if data, ok := msg.Data.(map[string]interface{}); ok {
 				if newMasterID, ok := data["new_master_id"].(float64); ok {
@@ -614,7 +603,7 @@ func (c *GameClient) handleBroadcast(msg BroadcastMessage) {
 			}
 			if gameState, ok := data["game_status"].(string); ok {
 				c.GameInfo.GameStatus = gameState
-				
+
 				// fmt.Printf("[DEBUG] gameState: old=%s, new=%s, HasChecked=%v, len(MyCards)=%d\n", c.LastGameState, gameState, c.HasChecked, len(c.MyCards))
 				if gameState == "playing" && c.LastGameState != "playing" {
 					// 游戏刚开始，清空上一局残留的数据
@@ -630,25 +619,25 @@ func (c *GameClient) handleBroadcast(msg BroadcastMessage) {
 				c.GameInfo.CurrentTurn = int(currentTurn)
 			}
 			if lastWinnerID, ok := data["last_winner_id"].(float64); ok {
-			c.GameInfo.LastWinnerID = int(lastWinnerID)
-			// 查找获胜者并显示胜利信息
-			if lastWinnerID > 0 && c.GameInfo.GameStatus == "waiting" {
-				var winAmount int
-				if winAmountData, ok := data["last_win_amount"].(float64); ok {
-					winAmount = int(winAmountData)
-				}
-				// 只有当获胜金额发生变化时才打印消息，防止重复打印
-				if winAmount != c.LastWinAmount {
-					for _, player := range c.GameInfo.Players {
-						if player.ID == int(lastWinnerID) {
-							c.AddLog(fmt.Sprintf("[系统] 游戏结束，%s 获胜，获得 %d 筹码", player.Name, winAmount))
-							c.LastWinAmount = winAmount // 更新上一次获胜金额
-							break
+				c.GameInfo.LastWinnerID = int(lastWinnerID)
+				// 查找获胜者并显示胜利信息
+				if lastWinnerID > 0 && c.GameInfo.GameStatus == "waiting" {
+					var winAmount int
+					if winAmountData, ok := data["last_win_amount"].(float64); ok {
+						winAmount = int(winAmountData)
+					}
+					// 只有当获胜金额发生变化时才打印消息，防止重复打印
+					if winAmount != c.LastWinAmount {
+						for _, player := range c.GameInfo.Players {
+							if player.ID == int(lastWinnerID) {
+								c.AddLog(fmt.Sprintf("[系统] 游戏结束，%s 获胜，获得 %d 筹码", player.Name, winAmount))
+								c.LastWinAmount = winAmount // 更新上一次获胜金额
+								break
+							}
 						}
 					}
 				}
 			}
-		}
 			if masterID, ok := data["master_id"].(float64); ok {
 				c.GameInfo.MasterID = int(masterID)
 			}
@@ -658,7 +647,7 @@ func (c *GameClient) handleBroadcast(msg BroadcastMessage) {
 			if currentSingleBet, ok := data["current_single_bet"].(float64); ok {
 				c.GameInfo.CurrentSingleBet = int(currentSingleBet)
 			}
-				if players, ok := data["players"].([]interface{}); ok {
+			if players, ok := data["players"].([]interface{}); ok {
 				c.GameInfo.Players = make([]PlayerInfo, 0, len(players))
 				for _, p := range players {
 					if playerMap, ok := p.(map[string]interface{}); ok {
@@ -760,7 +749,6 @@ func (c *GameClient) Compare(targetID int) error {
 	return c.Send(msg)
 }
 
-
 // ListRooms 列出房间
 func (c *GameClient) ListRooms() error {
 	msg := NewMessage(ActionListRooms, nil)
@@ -797,10 +785,10 @@ func (c *GameClient) Close() error {
 // HandleInput 处理用户输入
 func (c *GameClient) HandleInput(input string) {
 	// fmt.Printf("[DEBUG] HandleInput 收到输入: '%s'\n", input)
-	
+
 	input = strings.TrimSpace(input)
 	// fmt.Printf("[DEBUG] TrimSpace 后: '%s'\n", input)
-	
+
 	if input == "" {
 		// fmt.Println("[DEBUG] 输入为空，返回")
 		return
@@ -814,11 +802,11 @@ func (c *GameClient) HandleInput(input string) {
 	}
 
 	// fmt.Printf("[DEBUG] 房间模式，处理游戏指令\n")
-	
+
 	// 使用 Fields 自动处理所有空格，parts[0] 是命令，parts[1] 是参数
 	parts := strings.Fields(input)
 	// fmt.Printf("[DEBUG] Fields 解析结果: %v, 数量: %d\n", parts, len(parts))
-	
+
 	if len(parts) == 0 {
 		// fmt.Println("[DEBUG] parts 为空，返回")
 		return
@@ -857,7 +845,7 @@ func (c *GameClient) HandleInput(input string) {
 	}
 
 	// fmt.Printf("[DEBUG] 准备进入 switch，command = '%s'\n", command)
-	
+
 	switch command {
 	case "k":
 		// 检查玩家是否已弃牌
@@ -1037,7 +1025,6 @@ func (c *GameClient) handleLobbyInput(input string) {
 		if len(parts) < 2 {
 			c.AddLog("[错误] 加入房间需要指定房间ID，格式: j ID")
 			c.DrawTable()
-			return
 		}
 		roomID, err := strconv.Atoi(parts[1])
 		if err != nil {
@@ -1076,7 +1063,7 @@ func (c *GameClient) RunDashboard() {
 		for range ticker.C {
 			if c.IsOnline {
 				c.Ping()
-				
+
 				// 检查是否超过30秒没有收到服务器响应
 				if time.Since(lastMsgTime) > 30*time.Second {
 					fmt.Println("\n=== 服务器连接已断开 ===")
@@ -1088,7 +1075,7 @@ func (c *GameClient) RunDashboard() {
 			}
 		}
 	}()
-	
+
 	// 监听消息接收，更新最后消息时间
 	go func() {
 		for {
@@ -1175,7 +1162,7 @@ func (c *GameClient) RunDashboard() {
 	// 主循环
 	for scanner.Scan() {
 		input := strings.TrimSpace(scanner.Text())
-		
+
 		if input == "" {
 			continue
 		}
@@ -1223,28 +1210,28 @@ func generateRandomChineseName() string {
 		"李", "王", "张", "刘", "陈", "杨", "赵", "黄", "周", "吴",
 		"徐", "孙", "胡", "朱", "高", "林", "何", "郭", "马", "罗",
 	}
-	
+
 	firstNames := []string{
 		"伟", "芳", "娜", "秀英", "敏", "静", "丽", "强", "磊", "军",
 		"洋", "勇", "艳", "杰", "娟", "涛", "明", "超", "秀兰", "霞",
 		"平", "刚", "桂英", "玉兰", "萍", "飞", "志强", "桂兰", "玉兰", "秀珍",
 	}
-	
+
 	adjectives := []string{
 		"快乐", "勇敢", "聪明", "幸运", "神秘", "温柔", "活泼", "冷静", "热情", "幽默",
 		"潇洒", "豪爽", "机智", "沉稳", "阳光", "乐观", "自信", "坚强", "善良", "真诚",
 	}
-	
+
 	rand.Seed(time.Now().UnixNano())
-	
+
 	surname := surnames[rand.Intn(len(surnames))]
 	firstName := firstNames[rand.Intn(len(firstNames))]
-	
+
 	// 30%概率添加形容词
 	if rand.Float32() < 0.3 {
 		adjective := adjectives[rand.Intn(len(adjectives))]
 		return surname + firstName + adjective
 	}
-	
+
 	return surname + firstName
 }

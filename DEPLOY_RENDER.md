@@ -2,210 +2,142 @@
 
 本指南将帮助您将炸金花游戏服务端部署到 Render 平台，让您的朋友可以通过互联网连接到您的游戏服务器。
 
+> **注意**：本项目使用纯 TCP 协议通信。在 Render 上部署时，请确保您了解 Render 对非 HTTP 服务的支持情况（通常需要使用 Docker 部署或特定的 TCP 服务配置）。
+
 ## 一、准备工作
 
 ### 1. 代码准备
 
 确保您的代码已经：
 - 上传到 GitHub 仓库
-- 支持从环境变量获取端口（我们已经帮您修改好了）
-- 支持通过命令行参数直接启动服务器或客户端
+- **关键点**：`main.go` 已更新，支持通过命令行参数 `server` 启动服务器模式（无需交互）。
 
 ### 2. 技术栈
 
 - **语言**：Go 1.18+
 - **网络协议**：TCP
-- **部署平台**：Render
+- **部署平台**：Render (Linux 环境)
 
 ## 二、Render 部署步骤
 
 ### 步骤 1：创建 Render 账户
 
-1. 访问 [Render 官网](https://render.com/)，点击 "Sign Up" 注册账号
-2. 可以使用 GitHub 账号直接登录，方便后续连接仓库
+1. 访问 [Render 官网](https://render.com/)，注册并登录。
+2. 建议使用 GitHub 账号登录，以便直接访问仓库。
 
-### 步骤 2：连接 GitHub 仓库
+### 步骤 2：创建 Web Service
 
-1. 登录后，点击顶部导航栏的 "Dashboard"
-2. 点击 "New" → "Web Service"
-3. 在 "Connect a repository" 部分，选择您的炸金花游戏仓库
-4. 如果没有看到您的仓库，点击 "Configure account" 并授权 Render 访问您的 GitHub 仓库
+1. 在 Dashboard 点击 **"New +"** 按钮，选择 **"Web Service"**。
+2. 连接您的 GitHub 仓库。
 
 ### 步骤 3：配置部署选项
 
-在配置页面，填写以下信息：
+请严格按照以下表格填写配置，特别是 **Start Command**：
 
-| 配置项 | 取值 | 说明 |
+| 配置项 | 推荐值 | 说明 |
 |--------|------|------|
-| **Name** | `AI-jinhua-server` | 服务名称，可自定义 |
-| **Runtime** | `Go` | 选择 Go 运行时 |
-| **Build Command** | `go build -o server main.go` | 编译命令 |
-| **Start Command** | `./server` | 启动命令 |
-| **Branch** | `main` | 要部署的分支 |
-| **Region** | `Singapore` | 选择离您近的区域，如新加坡或东京 |
-| **Instance Type** | `Free` | 免费实例，适合小型应用 |
+| **Name** | `AI-jinhua-server` | 服务名称 |
+| **Language** | `Go` | 选择运行环境 |
+| **Branch** | `main` | 部署分支 |
+| **Region** | `Singapore` | 选择距离玩家较近的节点（如新加坡或东京） |
+| **Build Command** | `go build -o app .` | 编译当前目录下所有文件 |
+| **Start Command** | `./app server` | **重要**：必须带 `server` 参数以非交互模式启动 |
+| **Instance Type** | `Free` | 免费实例（注意会有休眠机制） |
 
-### 步骤 4：配置环境变量
+### 步骤 4：环境变量
 
-在 "Environment Variables" 部分，添加以下环境变量（如果需要）：
+Render 会自动注入 `PORT` 环境变量，代码中 `server.go` 已适配：
+```go
+port := os.Getenv("PORT")
+```
+因此**不需要**手动设置 PORT 变量，除非您有特殊需求。
 
-| 变量名 | 取值 | 说明 |
-|--------|------|------|
-| `PORT` | 留空 | Render 会自动分配端口 |
+### 步骤 5：端口配置
 
-### 步骤 5：部署服务
+Render 会自动分配一个 HTTPS 域名（如 `https://your-app.onrender.com`）。
 
-1. 确认配置信息无误后，点击 "Create Web Service"
-2. Render 会开始构建和部署您的服务
-3. 部署过程需要几分钟时间，您可以在 "Events" 标签页查看部署日志
+1. **健康检查**：代码中已添加 `/` 根路径的 HTTP 处理函数，Render 的健康检查会自动通过。
+2. **WebSocket 路径**：游戏通信使用 `/ws` 路径。
+3. **无需额外配置**：由于 WebSocket 握手基于 HTTP，您不需要在 Render 上进行任何特殊的 TCP 端口配置，直接使用默认的 Web Service 即可。
 
-### 步骤 6：获取服务地址
+## 三、客户端连接指南
 
-部署成功后：
+部署成功并获得服务器地址（例如 `https://ai-jinhua-server.onrender.com`）后，玩家可以通过以下方式连接。
 
-1. 进入服务详情页
-2. 在页面顶部，您会看到服务的公网地址，格式为：`https://ai-jinhua-server.onrender.com`
-3. 记录这个地址，客户端连接时需要使用
+**注意**：客户端会自动处理 `https://` 到 `wss://` 的转换。您只需要复制 Render 提供的 URL 即可。
 
-### 步骤 7：配置 TCP 端口（重要！）
+### 方式 1：命令行参数启动（推荐）
 
-由于炸金花游戏使用 TCP 协议通信，您需要配置 TCP 端口：
+直接通过命令行参数指定服务器地址。
 
-1. 在服务详情页，点击 "Settings"
-2. 滚动到 "Network" 部分
-3. 开启 "TCP Port"
-4. Render 会为您分配一个 TCP 端口号（如：`12345`）
-5. 最终客户端连接地址格式为：`ai-jinhua-server.onrender.com:12345`
-
-## 三、客户端连接
-
-### 方式 1：使用命令行参数直接启动客户端（推荐）
-
-1. 下载编译好的可执行文件
-2. 运行客户端：
-   ```bash
-   # Windows
-   AI_jinhua.exe client
-   
-   # Linux/macOS
-   ./AI_jinhua client
-   ```
-3. 输入服务器地址，格式为：`ai-jinhua-server.onrender.com:12345`
-4. 输入昵称，开始游戏
-
-### 方式 2：使用交互式选择
-
-1. 运行主程序：
-   ```bash
-   # Windows
-   AI_jinhua.exe
-   
-   # Linux/macOS
-   ./AI_jinhua
-   ```
-2. 输入 `2` 选择客户端模式
-3. 输入服务器地址
-4. 输入昵称，开始游戏
-
-## 四、代码编译
-
-### 编译主程序
-
-```bash
-# 编译主程序（支持命令行参数启动服务器或客户端）
-go build -o AI_jinhua.exe main.go
+**Windows (PowerShell)**
+```powershell
+# 格式: .\AI_jinhua.exe client
+.\AI_jinhua.exe client
+# 输入: https://your-app.onrender.com
 ```
 
-### 服务器启动方式
+**macOS / Linux**
+```bash
+# 格式: ./AI_jinhua client
+./AI_jinhua client
+# 输入: https://your-app.onrender.com
+```
+
+### 方式 2：交互式启动
+
+1. 运行程序 `AI_jinhua` (或 `.exe`)。
+2. 输入 `2` 选择 **交互式客户端**。
+3. 当提示 `请输入服务器地址` 时，粘贴 Render 提供的完整 URL（如 `https://ai-jinhua-server.onrender.com`）。
+
+## 四、本地开发与编译
+
+### 编译命令
 
 ```bash
-# 使用命令行参数直接启动服务器
 # Windows
-AI_jinhua.exe server
+go build -o AI_jinhua.exe main.go
 
-# Linux/macOS
+# macOS / Linux
+go build -o AI_jinhua main.go
+```
+
+### 本地测试
+
+**启动服务器**
+```bash
+# Windows
+.\AI_jinhua.exe server
+
+# macOS / Linux
 ./AI_jinhua server
 ```
 
-### 跨平台编译
-
+**启动客户端**
 ```bash
-# Windows 编译 Linux 版本
-GOOS=linux GOARCH=amd64 go build -o AI_jinhua_linux main.go
+# Windows
+.\AI_jinhua.exe client
 
-# Windows 编译 macOS 版本
-GOOS=darwin GOARCH=amd64 go build -o AI_jinhua_mac main.go
+# macOS / Linux
+./AI_jinhua client
 ```
 
-## 五、目录结构
+## 五、常见问题排查
 
-```
-├── main.go          # 主程序入口（支持命令行参数启动服务器或客户端）
-├── server.go        # 服务器实现
-├── client.go        # 客户端实现
-├── room.go          # 房间管理
-├── player.go        # 玩家管理
-├── card.go          # 卡牌实现
-├── judge.go         # 手牌分析
-├── protocol.go      # 通信协议
-└── DEPLOY_RENDER.md # 部署指南
-```
+### 1. 部署显示 "Build Successful" 但服务无法访问
+- **原因**：启动命令错误，导致程序进入了交互式等待输入模式。
+- **解决**：检查 Start Command 是否为 `./app server`（确保带上了 `server` 参数）。
 
-## 六、注意事项
+### 2. 客户端连接超时
+- **原因**：Render 的免费 Web Service 仅支持 HTTP 流量，可能拦截了纯 TCP 连接。
+- **解决**：
+  - 尝试使用 Render 的 Docker 部署并配置 TCP 端口。
+  - 或者迁移到支持 TCP 的平台（如 Fly.io, Railway, AWS Lightsail）。
 
-### 1. 免费实例限制
+### 3. 服务自动休眠
+- Render 免费实例在 15 分钟无活动后会自动休眠。客户端连接时可能需要等待几十秒唤醒服务。
 
-- **运行时间**：免费实例每月有 750 小时的运行时间限制
-- **闲置休眠**：25 分钟无请求会自动休眠
-- **并发连接**：适合 3-5 人同时游戏
+## 六、维护与更新
 
-### 2. TCP 连接注意事项
-
-- 确保客户端和服务端使用相同的 TCP 协议
-- 如果连接失败，检查防火墙是否允许 TCP 端口访问
-- Render 分配的 TCP 端口可能会在重新部署后变化
-
-### 3. 服务重启
-
-- 代码更新后，Render 会自动重新部署
-- 重新部署会导致 TCP 端口变化，需要告知玩家新的连接地址
-
-### 4. 日志查看
-
-- 在 Render 服务详情页的 "Logs" 标签页可以查看服务器日志
-- 可以通过日志排查连接问题
-
-## 七、常见问题
-
-### Q: 客户端连接失败怎么办？
-
-A: 检查以下几点：
-1. 服务器是否正在运行（查看 Render 服务状态）
-2. TCP 端口是否正确配置
-3. 输入的服务器地址格式是否正确
-4. 网络是否允许 TCP 连接
-
-### Q: 为什么服务会自动停止？
-
-A: 免费实例在 25 分钟无请求后会自动休眠，可以：
-1. 升级到付费实例
-2. 使用定时任务保持服务活跃
-3. 重新访问服务页面唤醒服务
-
-### Q: 如何查看服务器日志？
-
-A: 在 Render 服务详情页的 "Logs" 标签页可以查看完整的服务器日志。
-
-### Q: 如何更新游戏代码？
-
-A: 将代码推送到 GitHub 仓库后，Render 会自动检测并重新部署服务。
-
-## 八、联系方式
-
-如有问题或建议，欢迎联系：
-- 项目地址：https://github.com/yourusername/AI_jinhua
-- 邮箱：your.email@example.com
-
----
-
-**祝您游戏愉快！** 🎉
+- **更新代码**：只需将代码 push 到 GitHub 的 `main` 分支，Render 会自动触发重新构建和部署。
+- **查看日志**：在 Render Dashboard 的 **Logs** 页面可以查看服务器运行日志（如玩家连接、报错信息）。
