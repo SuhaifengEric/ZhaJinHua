@@ -310,7 +310,7 @@ nico
 ## 联系方式
 
 如有问题或建议，欢迎联系：
-- 项目地址：https://github.com/yourusername/AI_jinhua
+- 项目地址：https://github.com/SuhaifengEric/AI_jinhua
 - 邮箱：964039344@qq.com
 
 ---
