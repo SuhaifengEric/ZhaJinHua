@@ -26,6 +26,7 @@ type Client struct {
 	IsOnline   bool            // 是否在线
 	SendChan   chan Message    // 发送消息通道
 	LastActive time.Time       // 最后活跃时间
+	mu         sync.Mutex      // 互斥锁，保护并发访问
 }
 
 // ClientManager 客户端管理器
@@ -104,7 +105,9 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 // handleClient 处理客户端消息
 func (s *Server) handleClient(client *Client) {
 	defer func() {
+		client.mu.Lock()
 		client.IsOnline = false
+		client.mu.Unlock()
 		close(client.SendChan)
 
 		// 如果玩家在游戏中，处理离开逻辑
@@ -155,6 +158,9 @@ func (s *Server) handleClient(client *Client) {
 	// 启动心跳检测协程
 	go s.heartbeatCheck(client)
 
+	// 设置读取超时时间
+	client.Conn.SetReadDeadline(time.Now().Add(70 * time.Second))
+
 	for {
 		// 读取JSON消息
 		var msg Message
@@ -166,8 +172,13 @@ func (s *Server) handleClient(client *Client) {
 			break
 		}
 
+		// 重置读取超时时间
+		client.Conn.SetReadDeadline(time.Now().Add(70 * time.Second))
+
 		// 更新最后活跃时间
+		client.mu.Lock()
 		client.LastActive = time.Now()
+		client.mu.Unlock()
 
 		s.handleMessage(client, msg)
 	}
@@ -176,14 +187,20 @@ func (s *Server) handleClient(client *Client) {
 // writeLoop 写入消息循环(异步发送)
 func (c *Client) writeLoop() {
 	for msg := range c.SendChan {
-		if !c.IsOnline {
+		c.mu.Lock()
+		isOnline := c.IsOnline
+		c.mu.Unlock()
+
+		if !isOnline {
 			break
 		}
 
 		err := c.Conn.WriteJSON(msg)
 		if err != nil {
 			fmt.Printf("发送消息失败: %v\n", err)
+			c.mu.Lock()
 			c.IsOnline = false
+			c.mu.Unlock()
 			break
 		}
 	}
@@ -195,14 +212,21 @@ func (s *Server) heartbeatCheck(client *Client) {
 	defer ticker.Stop()
 
 	for range ticker.C {
-		if !client.IsOnline {
+		client.mu.Lock()
+		isOnline := client.IsOnline
+		lastActive := client.LastActive
+		client.mu.Unlock()
+
+		if !isOnline {
 			break
 		}
 
 		// 检查60秒内是否有活动
-		if time.Since(client.LastActive) > 60*time.Second {
+		if time.Since(lastActive) > 60*time.Second {
 			fmt.Printf("客户端 %d 超时断开\n", client.ID)
+			client.mu.Lock()
 			client.IsOnline = false
+			client.mu.Unlock()
 			client.Conn.Close()
 			s.Manager.RemoveClient(client.ID)
 			break
@@ -231,7 +255,9 @@ func (s *Server) handleMessage(client *Client, msg Message) {
 		s.handleCompare(client, msg)
 	case ActionPing:
 		// 心跳包,回复响应
+		client.mu.Lock()
 		client.LastActive = time.Now()
+		client.mu.Unlock()
 		s.sendResponse(client, true, "pong", nil)
 	case ActionLeave:
 		if client.Player.Room != nil {
@@ -716,6 +742,16 @@ func (s *Server) handleCompare(client *Client, msg Message) {
 		loserName = client.Player.Name
 	}
 
+	// 提前保存双方手牌字符串，用于比牌后私信展示
+	initiatorCardsStr := ""
+	for _, card := range client.Player.Cards {
+		initiatorCardsStr += card.String() + " "
+	}
+	targetCardsStr := ""
+	for _, card := range target.Cards {
+		targetCardsStr += card.String() + " "
+	}
+
 	// 调试日志：打印比牌结果
 	fmt.Printf("[DEBUG] 比牌结果: %s vs %s, result=%d, loser=%s\n",
 		client.Player.Name, target.Name, result, loserName)
@@ -733,6 +769,33 @@ func (s *Server) handleCompare(client *Client, msg Message) {
 	broadcastContent := fmt.Sprintf("玩家 %s 发起比牌，玩家 %s 战败出局！", client.Player.Name, loserName)
 	// fmt.Printf("[DEBUG] 服务器准备广播比牌结果: %s\n", broadcastContent)
 	s.Manager.BroadcastToRoom(NewBroadcastMessage("system", broadcastContent, nil), room.ID)
+
+	// 给比牌双方发送包含手牌详情的私有消息
+	winnerName := client.Player.Name
+	if loserName == client.Player.Name {
+		winnerName = target.Name
+	}
+	detailContent := fmt.Sprintf("比牌详情: [发起] %s (%s) vs [目标] %s (%s) => %s 胜",
+		client.Player.Name, initiatorCardsStr, target.Name, targetCardsStr, winnerName)
+
+	detailMsg := NewMessage(ActionSystem, BroadcastMessage{
+		Type:    "system",
+		Content: detailContent,
+	})
+
+	// 发送给发起者
+	select {
+	case client.SendChan <- detailMsg:
+	default:
+	}
+
+	// 发送给目标玩家（如果在线）
+	if targetClient, ok := s.Manager.GetClient(target.ID); ok {
+		select {
+		case targetClient.SendChan <- detailMsg:
+		default:
+		}
+	}
 
 	s.sendResponse(client, true, "比牌成功", nil)
 
@@ -963,7 +1026,11 @@ func (cm *ClientManager) Broadcast(msg BroadcastMessage) {
 	defer cm.mu.RUnlock()
 
 	for _, client := range cm.clients {
-		if client.IsOnline {
+		client.mu.Lock()
+		isOnline := client.IsOnline
+		client.mu.Unlock()
+
+		if isOnline {
 			// 将BroadcastMessage包装为Message
 			wrappedMsg := NewMessage(ActionSystem, BroadcastMessage{
 				Type:    msg.Type,
@@ -1009,7 +1076,11 @@ func (cm *ClientManager) BroadcastToLobby(msg BroadcastMessage) {
 	defer cm.mu.RUnlock()
 
 	for _, client := range cm.clients {
-		if client.IsOnline && client.Player != nil && (client.Player.Room == nil || client.Player.Room.ID == 0) {
+		client.mu.Lock()
+		isOnline := client.IsOnline
+		client.mu.Unlock()
+
+		if isOnline && client.Player != nil && (client.Player.Room == nil || client.Player.Room.ID == 0) {
 			// 将BroadcastMessage包装为Message
 			wrappedMsg := NewMessage(ActionSystem, BroadcastMessage{
 				Type:    msg.Type,
