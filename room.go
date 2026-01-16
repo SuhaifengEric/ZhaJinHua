@@ -527,6 +527,14 @@ func (r *Room) Settling() {
 	// 重置所有玩家状态为等待中，清空手牌
 	for _, player := range r.Players {
 		player.ResetRound()
+		
+		// 检查是否输光筹码（或不足以支付底注），发放低保
+		if player.Chips < r.Ante {
+			player.Chips += 1000
+			msg := fmt.Sprintf("%s玩家筹码不足底注，系统自动为他发放1000低保", player.Name)
+			r.SubsidyEvents = append(r.SubsidyEvents, msg)
+			fmt.Printf("房间 %d: %s\n", r.ID, msg)
+		}
 	}
 
 	// 设置游戏状态为等待中，允许开始新游戏

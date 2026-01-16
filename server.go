@@ -1095,6 +1095,14 @@ func (s *Server) GetAvailableRoom() *Room {
 
 // broadcastGameUpdate 广播游戏更新
 func (s *Server) broadcastGameUpdate(room *Room) {
+	// 检查是否有低保事件消息
+	subsidyEvents := room.PopSubsidyEvents()
+	if len(subsidyEvents) > 0 {
+		for _, event := range subsidyEvents {
+			s.Manager.BroadcastToRoom(NewBroadcastMessage("system", event, nil), room.ID)
+		}
+	}
+
 	roomInfo := room.GetRoomInfo()
 	s.Manager.BroadcastToRoom(NewBroadcastMessage("game_update", "游戏状态更新", roomInfo), room.ID)
 }
