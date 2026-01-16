@@ -46,7 +46,8 @@ func (p *Player) AddCard(card Card) {
 
 // ClearCards 清空手牌
 func (p *Player) ClearCards() {
-	p.Cards = p.Cards[:0]
+	// 创建新的切片，避免底层数组共享导致的潜在问题
+	p.Cards = make([]Card, 0, 3)
 	p.HandInfo = nil // 清除缓存
 }
 

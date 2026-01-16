@@ -59,7 +59,17 @@ func (d *Deck) Remaining() int {
 
 // Reset 重置牌堆,重新生成52张牌
 func (d *Deck) Reset() {
-	*d = *NewDeck()
+	// 创建全新的切片，避免底层数组引用问题
+	d.cards = make([]Card, 0, 52)
+
+	suits := []Suit{Spade, Heart, Diamond, Club}
+	ranks := []Rank{Rank2, Rank3, Rank4, Rank5, Rank6, Rank7, Rank8, Rank9, Rank10, RankJack, RankQueen, RankKing, RankAce}
+
+	for _, suit := range suits {
+		for _, rank := range ranks {
+			d.cards = append(d.cards, NewCard(suit, rank))
+		}
+	}
 }
 
 // Peek 查看牌堆顶部的牌(不移除)
@@ -87,11 +97,15 @@ func (d *Deck) String() string {
 }
 
 // DealToPlayers 给多个玩家发牌,每个玩家发指定数量的牌
+// 采用轮流发牌的方式，确保牌的随机性和公平性
 func (d *Deck) DealToPlayers(players []*Player, cardsPerPlayer int) {
-	for _, player := range players {
-		cards := d.Deal(cardsPerPlayer)
-		for _, card := range cards {
-			player.AddCard(card)
+	// 外层循环是每一轮发牌
+	for i := 0; i < cardsPerPlayer; i++ {
+		// 内层循环是给每个玩家发一张牌
+		for _, player := range players {
+			if card, ok := d.DealOneCard(); ok {
+				player.AddCard(card)
+			}
 		}
 	}
 }
