@@ -120,15 +120,15 @@ func (s *Server) handleClient(client *Client) {
 				// 如果该玩家是当前操作者，触发 Fold 并切换到下一个人
 				if room.Players[room.TurnIndex].ID == player.ID {
 					room.HandleAction(player, ActionFold, nil)
-				} else {
-					// 不是当前操作者，直接标记为弃牌
+				} else if player.Status == StatusPlaying || player.Status == StatusChecked {
+					// 不是当前操作者，且正在游戏中，直接标记为弃牌
 					player.Fold()
 				}
 
 				// 检查是否只剩一个活跃玩家
 				activeCount := 0
 				for _, p := range room.Players {
-					if p.Status != StatusFolded && p.Status != StatusLost {
+					if p.Status != StatusFolded && p.Status != StatusLost && p.Status != StatusSpectating {
 						activeCount++
 					}
 				}
@@ -918,11 +918,6 @@ func (s *Server) handleJoinRoom(client *Client, msg Message) {
 
 	if !exists {
 		s.sendError(client, "房间不存在")
-		return
-	}
-
-	if room.GameState == StatePlaying {
-		s.sendError(client, "房间游戏中，无法加入")
 		return
 	}
 

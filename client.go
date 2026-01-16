@@ -232,6 +232,8 @@ func getStatusName(status PlayerStatus) string {
 		return "已输掉"
 	case StatusAllIn:
 		return "全押"
+	case StatusSpectating:
+		return "观战中"
 	default:
 		return "未知"
 	}

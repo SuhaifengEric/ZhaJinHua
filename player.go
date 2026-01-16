@@ -12,6 +12,7 @@ const (
 	StatusChecked                         // 已看牌
 	StatusAllIn                           // 全押
 	StatusLost                            // 已输掉
+	StatusSpectating                      // 观战中
 )
 
 // Player 玩家结构体
@@ -125,6 +126,8 @@ func (s PlayerStatus) String() string {
 		return "全押"
 	case StatusLost:
 		return "已输掉"
+	case StatusSpectating:
+		return "观战中"
 	default:
 		return "未知状态"
 	}

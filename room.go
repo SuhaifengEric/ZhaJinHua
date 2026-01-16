@@ -31,6 +31,7 @@ type Room struct {
 	TurnIndex       int           // 当前操作者索引
 	GameState       GameState     // 游戏状态
 	RoundCount      int           // 当前游戏轮数
+	SubsidyEvents   []string      // 低保事件
 	mu              sync.RWMutex  // 读写锁
 }
 
@@ -58,6 +59,13 @@ func (r *Room) AddPlayer(player *Player) bool {
 
 	if len(r.Players) >= 6 {
 		return false
+	}
+
+	// 如果游戏正在进行或结算中，新加入的玩家状态为观战中
+	if r.GameState == StatePlaying || r.GameState == StateSettling {
+		player.Status = StatusSpectating
+	} else {
+		player.Status = StatusWaiting
 	}
 
 	r.Players = append(r.Players, player)
@@ -328,7 +336,7 @@ func (r *Room) handleFold(player *Player) error {
 	// 检查是否只剩一人
 	activeCount := 0
 	for _, p := range r.Players {
-		if p.Status != StatusFolded && p.Status != StatusLost {
+		if p.Status != StatusFolded && p.Status != StatusLost && p.Status != StatusSpectating {
 			activeCount++
 		}
 	}
@@ -399,9 +407,9 @@ func (r *Room) handleCompare(player *Player, payload interface{}) error {
 	}
 	// fmt.Printf("[DEBUG] room.handleCompare: 找到目标玩家，ID=%d, Name=%s, Status=%v\n", target.ID, target.Name, target.Status)
 
-	if target.Status == StatusFolded || target.Status == StatusLost {
+	if target.Status == StatusFolded || target.Status == StatusLost || target.Status == StatusSpectating {
 		// fmt.Printf("[DEBUG] room.handleCompare: 目标玩家已弃牌或已出局\n")
-		return fmt.Errorf("目标玩家已弃牌或已出局")
+		return fmt.Errorf("目标玩家已弃牌、已出局或正在观战")
 	}
 
 	// 比牌：严格按照 豹子 > 顺金 > 金花 > 顺子 > 对子 > 单张 的顺序判定
@@ -433,7 +441,7 @@ func (r *Room) handleCompare(player *Player, payload interface{}) error {
 	// 检查是否只剩一人
 	activeCount := 0
 	for _, p := range r.Players {
-		if p.Status != StatusFolded && p.Status != StatusLost {
+		if p.Status != StatusFolded && p.Status != StatusLost && p.Status != StatusSpectating {
 			activeCount++
 		}
 	}
@@ -464,7 +472,7 @@ func (r *Room) NextTurn() {
 		r.TurnIndex = (r.TurnIndex + 1) % len(r.Players)
 		nextPlayer := r.Players[r.TurnIndex]
 
-		if nextPlayer.Status != StatusFolded && nextPlayer.Status != StatusLost {
+		if nextPlayer.Status != StatusFolded && nextPlayer.Status != StatusLost && nextPlayer.Status != StatusSpectating {
 			return
 		}
 	}
@@ -529,7 +537,7 @@ func (r *Room) Settling() {
 	// 找出赢家
 	var winner *Player
 	for _, player := range r.Players {
-		if player.Status != StatusFolded && player.Status != StatusLost {
+		if player.Status != StatusFolded && player.Status != StatusLost && player.Status != StatusSpectating {
 			winner = player
 			break
 		}
@@ -647,4 +655,19 @@ func (r *Room) getGameStateString() string {
 	default:
 		return "unknown"
 	}
+}
+
+// PopSubsidyEvents 获取并清空低保事件
+func (r *Room) PopSubsidyEvents() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if len(r.SubsidyEvents) == 0 {
+		return nil
+	}
+
+	events := make([]string, len(r.SubsidyEvents))
+	copy(events, r.SubsidyEvents)
+	r.SubsidyEvents = r.SubsidyEvents[:0] // 清空切片
+	return events
 }
